@@ -1,0 +1,11 @@
+{
+  "name": "smart-umbrella-firmware-simulator",
+  "version": "1.0.0",
+  "description": "Mock ESP32 hardware simulator for testing HiveMQ MQTT and NFC scans",
+  "scripts": {
+    "start": "node mock_esp32.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.4"
+  }
+}

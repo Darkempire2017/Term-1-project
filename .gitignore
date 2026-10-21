@@ -1,5 +1,6 @@
 # Node modules
 node_modules/
+_legacy_archive/**/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -7,15 +8,22 @@ pnpm-debug.log*
 
 # Environment files
 .env
+.env.*
 .env.local
 .env.*.local
+*.env
+*.env.local
+backend/.env
+frontend/.env
 !.env.example
+!backend/.env.example
 
 # Build outputs
 dist/
 build/
 out/
 .next/
+*.tsbuildinfo
 
 # IDE & OS
 .DS_Store

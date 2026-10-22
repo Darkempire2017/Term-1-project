@@ -83,27 +83,48 @@ Extraction Format:
 Respond ONLY with valid JSON.
 `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [
-          {
-            parts: [
-              { text: prompt },
+      // Cascade across active Gemini Flash models in case of transient spikes
+      const candidateModels = ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3-flash-preview'];
+      let responseText = '';
+      let lastAiError: any = null;
+
+      for (const modelName of candidateModels) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: [
               {
-                inlineData: {
-                  mimeType,
-                  data: base64Data,
-                },
+                parts: [
+                  { text: prompt },
+                  {
+                    inlineData: {
+                      mimeType,
+                      data: base64Data,
+                    },
+                  },
+                ],
               },
             ],
-          },
-        ],
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+            config: {
+              responseMimeType: 'application/json',
+            },
+          });
 
-      const responseText = response.text || '';
+          if (response.text) {
+            responseText = response.text;
+            console.log(`🤖 [API/OCR] Successfully processed with ${modelName}`);
+            break;
+          }
+        } catch (err: any) {
+          console.warn(`⚠️ [API/OCR] Model ${modelName} failed or busy:`, err.message);
+          lastAiError = err;
+        }
+      }
+
+      if (!responseText) {
+        throw lastAiError || new Error('All AI models unavailable');
+      }
+
       console.log('🤖 [API/OCR] Gemini Raw Output:', responseText);
 
       const parsed = JSON.parse(responseText.trim());
@@ -126,11 +147,11 @@ Respond ONLY with valid JSON.
         },
       });
     } catch (aiError: any) {
-      console.warn('⚠️ [API/OCR] Gemini error:', aiError.message);
+      console.error('⚠️ [API/OCR] Gemini service error:', aiError.message);
       return NextResponse.json({
         success: false,
-        error_type: 'UNCLEAR_IMAGE',
-        message: "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text.",
+        error_type: 'SERVICE_BUSY',
+        message: 'Student verification service is momentarily busy. Please try uploading again in a few moments.',
       });
     }
   } catch (error: any) {

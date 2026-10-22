@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { publishUnlockCommand } from '@/lib/mqtt';
-import { sendBorrowReceiptEmail } from '@/lib/email';
 
 export async function POST(request: Request) {
   try {
@@ -55,60 +54,18 @@ export async function POST(request: Request) {
     }
 
     const { slot, umbrella_id } = availableSlot;
-    const now = new Date();
-    const dueTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-    // 3. Mark umbrella slot unavailable & assign to user
-    await supabaseAdmin
-      .from('umbrellas')
-      .update({
-        availability: false,
-        borrowed_user: cleanIndex,
-      })
-      .eq('slot', slot);
-
-    // 4. Record new active borrow record
-    const { data: newRecord } = await supabaseAdmin
-      .from('borrow_records')
-      .insert({
-        umbrella_id,
-        index_no: cleanIndex,
-        borrowed_time: now.toISOString(),
-        due_time: dueTime.toISOString(),
-        status: 'ACTIVE',
-      })
-      .select()
-      .maybeSingle();
-
-    // 5. Publish HiveMQ MQTT solenoid unlock command
+    // 3. Publish HiveMQ MQTT solenoid unlock command (5-second unlock pulse)
     const mqttResult = await publishUnlockCommand('BORROW_UNLOCK', slot, cleanIndex, 5000);
 
-    // 6. Fetch user profile and send email receipt in background
-    (async () => {
-      try {
-        const { data: user } = await supabaseAdmin
-          .from('users')
-          .select('email, username')
-          .eq('index_no', cleanIndex)
-          .maybeSingle();
-
-        const studentEmail = user?.email || `${cleanIndex.toLowerCase()}@uom.lk`;
-        const studentName = user?.username || 'Student';
-
-        await sendBorrowReceiptEmail(studentEmail, studentName, slot, umbrella_id, dueTime);
-      } catch (err) {
-        console.warn('⚠️ [API/Borrow] Email background error:', err);
-      }
-    })();
-
+    // Note: Do NOT mark umbrella as borrowed in DB yet.
+    // The loan is only created when the ESP32 detects the umbrella is physically off the rack (event/removed).
     return NextResponse.json({
       success: true,
-      message: `Slot #${slot} unlocked! Please remove your umbrella within 5 seconds.`,
+      message: `Slot #${slot} unlocked for 5 seconds. Pull the umbrella to complete borrow.`,
       slot,
       umbrella_id,
-      borrowed_time: now.toISOString(),
-      due_time: dueTime.toISOString(),
-      record_id: newRecord?.record_id,
+      duration_ms: 5000,
       mqtt: mqttResult,
     });
   } catch (error: any) {

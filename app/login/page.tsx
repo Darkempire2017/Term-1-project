@@ -199,17 +199,23 @@ function LoginForm() {
             </>
           )}
         </button>
-      </form>
 
-      {/* Footer / Switch to Sign Up */}
-      <div className="pt-4 border-t border-slate-100 text-center">
-        <p className="text-xs text-slate-500">
-          Don&apos;t have an account?{' '}
-          <Link href="/signup" className="text-sky-600 font-bold hover:underline">
-            Sign Up
+        {/* Prominent Register / Sign Up Section */}
+        <div className="pt-1 text-center space-y-2">
+          <div className="relative flex py-2 items-center">
+            <div className="flex-grow border-t border-slate-200"></div>
+            <span className="flex-shrink mx-3 text-[11px] text-slate-400 font-medium">New student?</span>
+            <div className="flex-grow border-t border-slate-200"></div>
+          </div>
+
+          <Link
+            href="/signup"
+            className="w-full py-3.5 px-4 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-800 font-bold text-xs border border-slate-200 shadow-sm flex items-center justify-center space-x-2 transition active:scale-[0.99]"
+          >
+            <span>Register with Student ID</span>
           </Link>
-        </p>
-      </div>
+        </div>
+      </form>
     </div>
   );
 }

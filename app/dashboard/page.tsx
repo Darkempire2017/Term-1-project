@@ -44,6 +44,7 @@ export default function DashboardPage() {
 
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<'borrow' | 'return' | null>(null);
+  const [unlockCountdown, setUnlockCountdown] = useState<number | null>(null);
   const [notification, setNotification] = useState<{
     type: 'success' | 'info' | 'error';
     text: string;
@@ -146,10 +147,12 @@ export default function DashboardPage() {
       return;
     }
 
+    const targetSlot = nextAvailableSlot.slot;
     setActionInProgress('borrow');
     setNotification(null);
 
     try {
+      // 1. Send unlock command to server
       const res = await fetch('/api/borrow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -159,46 +162,68 @@ export default function DashboardPage() {
       const json = await res.json();
 
       if (!res.ok || !json.success) {
-        setNotification({ type: 'error', text: json.message || 'Failed to borrow umbrella.' });
+        setNotification({ type: 'error', text: json.message || 'Failed to unlock umbrella slot.' });
+        setActionInProgress(null);
         return;
       }
 
-      const targetSlot = json.slot || nextAvailableSlot.slot;
-      const targetUmbrellaId = json.umbrella_id || nextAvailableSlot.umbrella_id;
-      const borrowedTime = json.borrowed_time || new Date().toISOString();
-
-      setActiveLoan({
-        umbrella_id: targetUmbrellaId,
-        slot: targetSlot,
-        borrowed_time: borrowedTime,
-      });
-
-      setSlots((prev) =>
-        prev.map((s) =>
-          s.slot === targetSlot
-            ? { ...s, availability: false, borrowed_user: currentUserIndex }
-            : s
-        )
-      );
-
+      // 2. Start active 5-second physical unlock countdown
       setNotification({
-        type: 'success',
-        text: `🔓 Slot #${targetSlot} unlocked for 5 seconds! Take your umbrella.`,
+        type: 'info',
+        text: `🔓 Slot #${targetSlot} unlocked! Please pull the umbrella off the rack within 5 seconds.`,
       });
+
+      let remaining = 5;
+      setUnlockCountdown(remaining);
+
+      const countdownTimer = setInterval(async () => {
+        remaining -= 1;
+        if (remaining > 0) {
+          setUnlockCountdown(remaining);
+        } else {
+          clearInterval(countdownTimer);
+          setUnlockCountdown(null);
+          setActionInProgress(null);
+
+          // 3. Check Supabase if umbrella was actually removed by hardware
+          const { data: activeBorrow } = await supabase
+            .from('borrow_records')
+            .select('*')
+            .eq('index_no', currentUserIndex)
+            .eq('status', 'ACTIVE')
+            .maybeSingle();
+
+          if (activeBorrow) {
+            // Umbrella was physically pulled off rack
+            setActiveLoan({
+              record_id: activeBorrow.record_id,
+              umbrella_id: activeBorrow.umbrella_id,
+              slot: targetSlot,
+              borrowed_time: activeBorrow.borrowed_time,
+            });
+            setNotification({
+              type: 'success',
+              text: `✅ Umbrella removed! Active loan started for ${activeBorrow.umbrella_id}.`,
+            });
+            refreshStationData();
+          } else {
+            // Station isn't live yet or umbrella was not pulled off rack
+            setNotification({
+              type: 'info',
+              text: `🔒 5s window expired. Solenoid re-locked on Slot #${targetSlot}. Umbrella was not removed.`,
+            });
+            refreshStationData();
+          }
+        }
+      }, 1000);
     } catch (err: any) {
-      console.warn('Borrow API fallback:', err);
-      const targetSlot = nextAvailableSlot.slot;
-      setActiveLoan({
-        umbrella_id: nextAvailableSlot.umbrella_id,
-        slot: targetSlot,
-        borrowed_time: new Date().toISOString(),
-      });
-      setNotification({
-        type: 'success',
-        text: `🔓 Slot #${targetSlot} unlocked! Umbrella checked out.`,
-      });
-    } finally {
+      console.warn('Borrow API note:', err);
       setActionInProgress(null);
+      setUnlockCountdown(null);
+      setNotification({
+        type: 'error',
+        text: 'Could not connect to station. Please check connection.',
+      });
     }
   };
 
@@ -465,14 +490,21 @@ export default function DashboardPage() {
           <button
             type="button"
             onClick={handleBorrow}
-            disabled={Boolean(activeLoan) || !nextAvailableSlot || actionInProgress !== null}
+            disabled={Boolean(activeLoan) || !nextAvailableSlot || actionInProgress !== null || unlockCountdown !== null}
             className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
-              !activeLoan && nextAvailableSlot
+              unlockCountdown !== null
+                ? 'bg-amber-500 text-white shadow-amber-500/30 animate-pulse cursor-wait'
+                : !activeLoan && nextAvailableSlot
                 ? 'bg-sky-600 hover:bg-sky-700 text-white shadow-sky-600/30 active:scale-[0.99] cursor-pointer'
                 : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
             }`}
           >
-            {actionInProgress === 'borrow' ? (
+            {unlockCountdown !== null ? (
+              <>
+                <Unlock className="w-5 h-5 animate-bounce" />
+                <span>Slot #{nextAvailableSlot?.slot} Unlocked! Pull Umbrella ({unlockCountdown}s)</span>
+              </>
+            ) : actionInProgress === 'borrow' ? (
               <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
             ) : !activeLoan ? (
               <>

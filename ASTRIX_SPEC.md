@@ -20,7 +20,7 @@
   - [x] `/login`: Index No., Password, Forgot Password, Sign In, Sign Up link
   - [x] `/signup` (Screen 1A): Dedicated ID upload page with Gemini clarity verification & rejection alert
   - [x] `/signup/details` (Screen 1B): Extracted ID fields are UNCHANGEABLE / LOCKED, email is the ONLY editable field
-  - [x] `/api/ocr`: Gemini 2.5 Flash OCR verifying card legibility with rejection handling & demo fallback
+  - [x] `/api/ocr`: Gemini 3.8 Flash OCR verifying card legibility with JSON mode, real dynamic extraction, and rejection handling
   - [x] `VERIFY` submission generating OTP and forwarding to `/verify`
 - [x] **Step 4: Screen 2 — Verify / Reset Password (`/verify`)**
   - [x] 6-digit OTP verification code inputs

@@ -3,17 +3,19 @@
 import React, { useState, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Camera, Upload, CheckCircle2, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { Camera, Upload, CheckCircle2, AlertTriangle, ShieldCheck, X } from 'lucide-react';
 import { useViewMode } from '@/components/ViewModeContext';
 import { scanStudentIdLocally } from '@/lib/ocr-client';
 
 export default function UploadIdPage() {
   const router = useRouter();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const { isStudentMode } = useViewMode();
 
   const [idPhotoPreview, setIdPhotoPreview] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showSourceModal, setShowSourceModal] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
   const [progressText, setProgressText] = useState('Initializing local scanner...');
   const [errorInfo, setErrorInfo] = useState<{ title: string; message: string } | null>(null);
@@ -85,6 +87,8 @@ export default function UploadIdPage() {
     if (file) {
       processImageFile(file);
     }
+    // Reset inputs so the same file can be re-selected if needed
+    e.target.value = '';
   };
 
   // Developer Testing Shortcuts
@@ -111,7 +115,7 @@ export default function UploadIdPage() {
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between p-6 bg-white select-none overflow-y-auto">
+    <div className="flex-1 flex flex-col justify-between p-6 bg-white select-none overflow-y-auto relative">
       {/* Top Header */}
       <div className="pt-2 space-y-3">
         <div className="flex items-center justify-between">
@@ -163,7 +167,7 @@ export default function UploadIdPage() {
             </div>
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => setShowSourceModal(true)}
               className="w-full mt-2 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition"
             >
               <Camera className="w-3.5 h-3.5" />
@@ -172,10 +176,18 @@ export default function UploadIdPage() {
           </div>
         )}
 
-        {/* Hidden File Input */}
+        {/* Hidden File Inputs: Camera (with capture) & Gallery */}
         <input
           type="file"
-          ref={fileInputRef}
+          ref={cameraInputRef}
+          onChange={handleFileChange}
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+        />
+        <input
+          type="file"
+          ref={galleryInputRef}
           onChange={handleFileChange}
           accept="image/*"
           className="hidden"
@@ -183,7 +195,7 @@ export default function UploadIdPage() {
 
         {/* Upload Card */}
         <div
-          onClick={() => !isProcessing && fileInputRef.current?.click()}
+          onClick={() => !isProcessing && setShowSourceModal(true)}
           className={`w-full border-2 border-dashed rounded-3xl p-6 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-3 group ${
             errorInfo
               ? 'border-rose-300 bg-rose-50/30 hover:border-rose-400'
@@ -220,6 +232,10 @@ export default function UploadIdPage() {
               </div>
               <button
                 type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowSourceModal(true);
+                }}
                 className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs uppercase tracking-wider inline-flex items-center space-x-1.5 shadow-md shadow-sky-600/30"
               >
                 <Camera className="w-4 h-4" />
@@ -275,6 +291,79 @@ export default function UploadIdPage() {
           </Link>
         </p>
       </div>
+
+      {/* Source Selection Action Sheet Modal */}
+      {showSourceModal && (
+        <div
+          onClick={() => setShowSourceModal(false)}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl border border-slate-200 space-y-4 animate-in slide-in-from-bottom-6 duration-300"
+          >
+            <div className="text-center space-y-1 relative">
+              <div className="w-10 h-1 bg-slate-300 rounded-full mx-auto mb-3 sm:hidden" />
+              <h3 className="text-base font-bold text-slate-900">Upload Student ID Photo</h3>
+              <p className="text-xs text-slate-500">Choose how you want to provide your ID card</p>
+              <button
+                type="button"
+                onClick={() => setShowSourceModal(false)}
+                className="absolute -top-1 right-0 p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition hidden sm:inline-flex"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5 pt-2">
+              {/* Option 1: Live Camera */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSourceModal(false);
+                  cameraInputRef.current?.click();
+                }}
+                className="w-full p-4 rounded-2xl bg-sky-50 hover:bg-sky-100 border-2 border-sky-200 text-sky-950 flex items-center space-x-3.5 transition group active:scale-[0.99] text-left"
+              >
+                <div className="w-11 h-11 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-md shadow-sky-600/20 group-hover:scale-105 transition shrink-0">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-sm text-sky-950">Take Photo with Camera</p>
+                  <p className="text-xs text-sky-700">Open camera directly to snap your ID</p>
+                </div>
+              </button>
+
+              {/* Option 2: Gallery / Files */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSourceModal(false);
+                  galleryInputRef.current?.click();
+                }}
+                className="w-full p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border-2 border-slate-200 text-slate-900 flex items-center space-x-3.5 transition group active:scale-[0.99] text-left"
+              >
+                <div className="w-11 h-11 rounded-xl bg-slate-800 text-white flex items-center justify-center shadow-md shadow-slate-800/20 group-hover:scale-105 transition shrink-0">
+                  <Upload className="w-5 h-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-sm text-slate-900">Choose from Gallery / Files</p>
+                  <p className="text-xs text-slate-500">Select an existing photo from your device</p>
+                </div>
+              </button>
+            </div>
+
+            {/* Cancel Button */}
+            <button
+              type="button"
+              onClick={() => setShowSourceModal(false)}
+              className="w-full py-3 rounded-2xl text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

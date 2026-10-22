@@ -13,11 +13,11 @@ export default function UploadIdPage() {
 
   const [idPhotoPreview, setIdPhotoPreview] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [unclearError, setUnclearError] = useState<string | null>(null);
+  const [errorInfo, setErrorInfo] = useState<{ title: string; message: string } | null>(null);
 
   const processImageFile = async (file: File, simulateBlurry = false) => {
     setIsProcessing(true);
-    setUnclearError(null);
+    setErrorInfo(null);
 
     // Image preview
     const reader = new FileReader();
@@ -38,14 +38,23 @@ export default function UploadIdPage() {
         body: formData,
       });
 
-      const json = await res.json();
+      let json: any;
+      try {
+        json = await res.json();
+      } catch (parseErr) {
+        setErrorInfo({
+          title: 'Server Response Error',
+          message: `Unable to parse verification response (HTTP ${res.status}). Please try again.`,
+        });
+        return;
+      }
 
       if (!json.success) {
-        // If Gemini or OCR couldn't read clearly
-        setUnclearError(
-          json.message ||
-            "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text."
-        );
+        const title = json.error_type === 'UNCLEAR_IMAGE' ? 'Unclear Photo Detected' : 'Verification Notice';
+        setErrorInfo({
+          title,
+          message: json.message || "We couldn't clearly read your Student ID. Please upload a clearer photo.",
+        });
         return;
       }
 
@@ -61,9 +70,10 @@ export default function UploadIdPage() {
       // Smoothly navigate to Screen 1B: Details page
       router.push('/signup/details');
     } catch (err: any) {
-      setUnclearError(
-        "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text."
-      );
+      setErrorInfo({
+        title: 'Connection Issue',
+        message: err.message || 'Unable to connect to verification server. Please check your network and try again.',
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -79,7 +89,7 @@ export default function UploadIdPage() {
   // Developer Testing Shortcuts
   const handleTestClearCard = () => {
     setIsProcessing(true);
-    setUnclearError(null);
+    setErrorInfo(null);
     setTimeout(() => {
       sessionStorage.setItem('astrix_verified_username', 'K. A. Nimal Perera');
       sessionStorage.setItem('astrix_verified_index', '210042A');
@@ -90,12 +100,13 @@ export default function UploadIdPage() {
 
   const handleTestBlurryCard = () => {
     setIsProcessing(true);
-    setUnclearError(null);
+    setErrorInfo(null);
     setTimeout(() => {
       setIsProcessing(false);
-      setUnclearError(
-        "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text."
-      );
+      setErrorInfo({
+        title: 'Unclear Photo Detected',
+        message: "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text.",
+      });
     }, 600);
   };
 
@@ -140,14 +151,14 @@ export default function UploadIdPage() {
 
       {/* Main Upload Body */}
       <div className="my-auto py-4 space-y-4">
-        {/* Unclear / Blurry Error Banner */}
-        {unclearError && (
+        {/* Error Banner */}
+        {errorInfo && (
           <div className="p-4 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-800 text-xs space-y-2 animate-in fade-in slide-in-from-top-1 shadow-sm">
             <div className="flex items-start space-x-2">
               <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <p className="font-bold text-rose-900 text-xs">Unclear Photo Detected</p>
-                <p className="leading-relaxed text-rose-800">{unclearError}</p>
+                <p className="font-bold text-rose-900 text-xs">{errorInfo.title}</p>
+                <p className="leading-relaxed text-rose-800">{errorInfo.message}</p>
               </div>
             </div>
             <button
@@ -156,7 +167,7 @@ export default function UploadIdPage() {
               className="w-full mt-2 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition"
             >
               <Camera className="w-3.5 h-3.5" />
-              <span>Upload Clearer Photo</span>
+              <span>Retry ID Upload</span>
             </button>
           </div>
         )}
@@ -174,7 +185,7 @@ export default function UploadIdPage() {
         <div
           onClick={() => !isProcessing && fileInputRef.current?.click()}
           className={`w-full border-2 border-dashed rounded-3xl p-6 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-3 group ${
-            unclearError
+            errorInfo
               ? 'border-rose-300 bg-rose-50/30 hover:border-rose-400'
               : 'border-sky-300 bg-sky-50/40 hover:bg-sky-50 hover:border-sky-500'
           }`}

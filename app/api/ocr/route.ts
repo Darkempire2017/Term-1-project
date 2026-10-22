@@ -15,10 +15,11 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const rawApiKey = process.env.GEMINI_API_KEY || '';
+    const cleanApiKey = rawApiKey.trim().replace(/^["']|["']$/g, '');
 
     // 2. Error if API key is not configured (no silent mock fallback)
-    if (!apiKey || apiKey.trim() === '') {
+    if (!cleanApiKey) {
       console.warn('⚠️ [API/OCR] GEMINI_API_KEY is not configured in environment variables.');
       return NextResponse.json(
         {
@@ -44,11 +45,11 @@ export async function POST(req: NextRequest) {
     // Convert file to base64
     const buffer = Buffer.from(await file.arrayBuffer());
     const base64Data = buffer.toString('base64');
-    const mimeType = file.type || 'image/jpeg';
+    const mimeType = file.type && file.type.startsWith('image/') ? file.type : 'image/jpeg';
 
     try {
       const { GoogleGenAI } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey: cleanApiKey });
 
       const prompt = `
 You are an expert OCR assistant for Sri Lankan university student identity cards, specifically the University of Moratuwa (UoM).
@@ -152,6 +153,7 @@ Respond ONLY with valid JSON.
         success: false,
         error_type: 'SERVICE_BUSY',
         message: 'Student verification service is momentarily busy. Please try uploading again in a few moments.',
+        error_details: aiError?.message || String(aiError),
       });
     }
   } catch (error: any) {

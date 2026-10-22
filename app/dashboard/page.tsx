@@ -10,7 +10,6 @@ import {
   Clock,
   AlertCircle,
   RefreshCw,
-  Sparkles,
   ArrowRight,
   ShieldCheck,
   Check,
@@ -24,8 +23,8 @@ import { useViewMode } from '@/components/ViewModeContext';
 
 export default function DashboardPage() {
   const { isStudentMode } = useViewMode();
-  const [currentUserIndex, setCurrentUserIndex] = useState('210042A');
-  const [currentUserName, setCurrentUserName] = useState('K. A. Nimal Perera');
+  const [currentUserIndex, setCurrentUserIndex] = useState('DEV001');
+  const [currentUserName, setCurrentUserName] = useState('Developer Account');
 
   // Supabase slot states
   const [slots, setSlots] = useState<UmbrellaSlotType[]>([
@@ -56,11 +55,23 @@ export default function DashboardPage() {
       const raw = localStorage.getItem('astrix_user');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed.index_no) {
-          setCurrentUserIndex(parsed.index_no);
-          setCurrentUserName(parsed.username || 'K. A. Nimal Perera');
+        if (parsed.index_no && parsed.index_no.length >= 3) {
+          setCurrentUserIndex(parsed.index_no.toUpperCase());
+          setCurrentUserName(parsed.username || 'Developer Account');
+          return;
         }
       }
+      // Set clean default developer account
+      localStorage.setItem(
+        'astrix_user',
+        JSON.stringify({
+          index_no: 'DEV001',
+          username: 'Developer Account',
+          email: 'dev@astrix.uom.lk',
+        })
+      );
+      setCurrentUserIndex('DEV001');
+      setCurrentUserName('Developer Account');
     } catch (e) {
       console.warn('Session parse:', e);
     }
@@ -131,7 +142,7 @@ export default function DashboardPage() {
   // State A action: Borrow Umbrella
   const handleBorrow = async () => {
     if (!nextAvailableSlot) {
-      setNotification({ type: 'error', text: 'No umbrellas currently available at this kiosk.' });
+      setNotification({ type: 'error', text: 'No umbrellas currently available at this station.' });
       return;
     }
 
@@ -139,35 +150,27 @@ export default function DashboardPage() {
     setNotification(null);
 
     try {
-      const targetSlot = nextAvailableSlot.slot;
-      const targetUmbrellaId = nextAvailableSlot.umbrella_id;
-      const nowIso = new Date().toISOString();
-      const dueIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
-      // 1. Mark slot as unavailable in Supabase
-      await supabase
-        .from('umbrellas')
-        .update({
-          availability: false,
-          borrowed_user: currentUserIndex,
-          updated_at: nowIso,
-        })
-        .eq('slot', targetSlot);
-
-      // 2. Insert ACTIVE record in borrow_records
-      await supabase.from('borrow_records').insert({
-        umbrella_id: targetUmbrellaId,
-        index_no: currentUserIndex,
-        borrowed_time: nowIso,
-        due_time: dueIso,
-        status: 'ACTIVE',
+      const res = await fetch('/api/borrow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index_no: currentUserIndex }),
       });
 
-      // Update local state immediately for instant feedback
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        setNotification({ type: 'error', text: json.message || 'Failed to borrow umbrella.' });
+        return;
+      }
+
+      const targetSlot = json.slot || nextAvailableSlot.slot;
+      const targetUmbrellaId = json.umbrella_id || nextAvailableSlot.umbrella_id;
+      const borrowedTime = json.borrowed_time || new Date().toISOString();
+
       setActiveLoan({
         umbrella_id: targetUmbrellaId,
         slot: targetSlot,
-        borrowed_time: nowIso,
+        borrowed_time: borrowedTime,
       });
 
       setSlots((prev) =>
@@ -180,11 +183,10 @@ export default function DashboardPage() {
 
       setNotification({
         type: 'success',
-        text: `🔓 Solenoid lock on Slot #${targetSlot} unlocked for 5 seconds! Take your umbrella.`,
+        text: `🔓 Slot #${targetSlot} unlocked for 5 seconds! Take your umbrella.`,
       });
     } catch (err: any) {
-      console.warn('Borrow simulation note:', err);
-      // Local fallback for seamless testing
+      console.warn('Borrow API fallback:', err);
       const targetSlot = nextAvailableSlot.slot;
       setActiveLoan({
         umbrella_id: nextAvailableSlot.umbrella_id,
@@ -193,7 +195,7 @@ export default function DashboardPage() {
       });
       setNotification({
         type: 'success',
-        text: `🔓 Solenoid lock on Slot #${targetSlot} unlocked! Umbrella checked out.`,
+        text: `🔓 Slot #${targetSlot} unlocked! Umbrella checked out.`,
       });
     } finally {
       setActionInProgress(null);
@@ -208,36 +210,26 @@ export default function DashboardPage() {
     setNotification(null);
 
     try {
-      const targetSlot = activeLoan.slot;
-      const targetUmbrellaId = activeLoan.umbrella_id;
-      const nowIso = new Date().toISOString();
+      const res = await fetch('/api/return', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index_no: currentUserIndex, slot: activeLoan.slot }),
+      });
 
-      // 1. Update Supabase umbrella slot back to available
-      await supabase
-        .from('umbrellas')
-        .update({
-          availability: true,
-          borrowed_user: null,
-          updated_at: nowIso,
-        })
-        .eq('slot', targetSlot);
+      const json = await res.json();
 
-      // 2. Mark borrow_records status as RETURNED
-      await supabase
-        .from('borrow_records')
-        .update({
-          status: 'RETURNED',
-          returned_time: nowIso,
-        })
-        .eq('index_no', currentUserIndex)
-        .eq('status', 'ACTIVE');
+      if (!res.ok || !json.success) {
+        setNotification({ type: 'error', text: json.message || 'Failed to return umbrella.' });
+        return;
+      }
 
-      // Update local state immediately
+      const returnedSlot = json.slot || activeLoan.slot;
+
       setActiveLoan(null);
 
       setSlots((prev) =>
         prev.map((s) =>
-          s.slot === targetSlot
+          s.slot === returnedSlot
             ? { ...s, availability: true, borrowed_user: null }
             : s
         )
@@ -245,10 +237,10 @@ export default function DashboardPage() {
 
       setNotification({
         type: 'success',
-        text: `↩️ Umbrella returned to Slot #${targetSlot}! Solenoid locked & return confirmed.`,
+        text: `↩️ Umbrella returned to Slot #${returnedSlot}! Lock engaged and return confirmed.`,
       });
     } catch (err: any) {
-      console.warn('Return simulation note:', err);
+      console.warn('Return API fallback:', err);
       setActiveLoan(null);
       setNotification({
         type: 'success',
@@ -279,14 +271,13 @@ export default function DashboardPage() {
 
   return (
     <div className="flex-1 flex flex-col justify-between bg-slate-50 select-none overflow-y-auto">
-      {/* Top Header & Kiosk Info */}
+      {/* Top Header & Station Info */}
       <div className="p-5 space-y-3">
         {/* Top Badges & Dev State Switcher */}
         <div className="flex items-center justify-between">
-          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-sky-100/80 text-sky-800 text-xs font-semibold">
-            <Sparkles className="w-3.5 h-3.5 text-sky-600" />
-            <span>Kiosk-01 • Katubedda</span>
-          </div>
+          <span className="text-xs font-semibold text-slate-500">
+            Station 01 • Katubedda
+          </span>
 
           {/* Interactive State Toggle (Visible in Dev Mode) */}
           {!isStudentMode && (
@@ -304,7 +295,7 @@ export default function DashboardPage() {
         {/* User Welcome */}
         <div className="flex items-center justify-between pt-1">
           <div>
-            <h1 className="text-xl font-black text-slate-900 tracking-tight">Smart Umbrella Kiosk</h1>
+            <h1 className="text-xl font-black text-slate-900 tracking-tight">Smart Umbrella Station</h1>
             <p className="text-xs text-slate-500">
               Welcome, <span className="font-bold text-slate-700">{currentUserName}</span> ({currentUserIndex})
             </p>
@@ -368,14 +359,14 @@ export default function DashboardPage() {
               <p className="text-xs text-sky-100/90 leading-relaxed">
                 {nextAvailableSlot
                   ? `Umbrella tag (${nextAvailableSlot.umbrella_id}) is docked. Tap "Borrow" below to release the solenoid lock.`
-                  : 'All umbrellas are currently in use. Please check back soon or try another kiosk.'}
+                  : 'All umbrellas are currently in use. Please check back soon.'}
               </p>
             </div>
 
             {/* 4-Slot Visual Matrix */}
             <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-sm space-y-2.5">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                Physical Kiosk Slots (1 - 4)
+                Physical Slots (1 - 4)
               </span>
 
               <div className="grid grid-cols-4 gap-2">
@@ -460,7 +451,7 @@ export default function DashboardPage() {
                 <span>Return Instructions</span>
               </div>
               <p className="text-xs text-slate-500 leading-relaxed">
-                When you tap <span className="font-bold text-emerald-600">Return</span>, the kiosk lock opens. Insert the umbrella firmly until you hear the mechanical latch engage.
+                When you tap <span className="font-bold text-emerald-600">Return</span>, the lock opens. Insert the umbrella firmly until you hear the mechanical latch engage.
               </p>
             </div>
           </div>

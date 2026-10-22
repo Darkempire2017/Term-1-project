@@ -3,7 +3,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Umbrella, Lock, User, ArrowRight, Eye, EyeOff, AlertCircle, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Umbrella, Lock, User, ArrowRight, Eye, EyeOff, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useViewMode } from '@/components/ViewModeContext';
 
@@ -45,53 +45,31 @@ function LoginForm() {
     setLoading(true);
 
     try {
-      // Query user in live Supabase
-      const { data: user, error: dbError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('index_no', cleanIndex)
-        .maybeSingle();
+      // Authenticate via backend API
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index_no: cleanIndex, password }),
+      });
 
-      if (dbError) {
-        console.warn('Database lookup error:', dbError.message);
-      }
+      const json = await res.json();
 
-      if (user) {
-        // Password check
-        if (user.password && user.password !== password) {
-          setError('Invalid password. Please check and try again.');
-          setLoading(false);
-          return;
-        }
-
-        // Store user in local storage session
-        localStorage.setItem(
-          'astrix_user',
-          JSON.stringify({
-            index_no: user.index_no,
-            username: user.username,
-            email: user.email,
-          })
-        );
-
-        setSuccess(`Welcome back, ${user.username}!`);
-        setTimeout(() => {
-          router.push('/dashboard');
-        }, 600);
+      if (!res.ok || !json.success) {
+        setError(json.message || 'Invalid password. Please check and try again.');
+        setLoading(false);
         return;
       }
 
-      // If user doesn't exist yet in Supabase (first-time demo testing mode)
-      localStorage.setItem(
-        'astrix_user',
-        JSON.stringify({
-          index_no: cleanIndex,
-          username: cleanIndex === '210042A' ? 'K. A. Nimal Perera' : `Student ${cleanIndex}`,
-          email: `${cleanIndex.toLowerCase()}@uom.lk`,
-        })
-      );
+      const activeUser = json.user || {
+        index_no: cleanIndex,
+        username: cleanIndex === '210042A' ? 'K. A. Nimal Perera' : `Student ${cleanIndex}`,
+        email: `${cleanIndex.toLowerCase()}@uom.lk`,
+      };
 
-      setSuccess('Signed in successfully (Demo Session).');
+      // Store user in local storage session
+      localStorage.setItem('astrix_user', JSON.stringify(activeUser));
+
+      setSuccess(`Welcome back, ${activeUser.username}!`);
       setTimeout(() => {
         router.push('/dashboard');
       }, 600);
@@ -103,7 +81,7 @@ function LoginForm() {
   };
 
   const fillDemoStudent = () => {
-    setIndexNo('210042A');
+    setIndexNo('DEV001');
     setPassword('password123');
     setError(null);
   };
@@ -112,19 +90,14 @@ function LoginForm() {
     <div className="flex-1 flex flex-col justify-between p-6 bg-white select-none">
       {/* Top Header */}
       <div className="pt-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-sky-50 text-sky-700 text-xs font-semibold border border-sky-100">
-            <Sparkles className="w-3.5 h-3.5 text-sky-500" />
-            <span>University of Moratuwa</span>
-          </div>
-
+        <div className="flex items-center justify-end">
           {!isStudentMode && (
             <button
               type="button"
               onClick={fillDemoStudent}
               className="text-[11px] text-sky-600 hover:text-sky-700 font-bold bg-sky-50 hover:bg-sky-100/80 px-2.5 py-1 rounded-lg transition"
             >
-              Auto-fill Demo
+              Auto-fill Dev (DEV001)
             </button>
           )}
         </div>

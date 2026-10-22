@@ -35,12 +35,12 @@
   - [x] **State A ("When borrowing" - no active loan):** Shows `Available slot: [ X ]`, active `Borrow` button, disabled `Return` button
   - [x] **State B ("When returning" - active loan):** Shows borrowed `Umbrella ID`, elapsed time (`Since when`), disabled `Borrow` button, active `Return` button
   - [x] Bottom Navigation integration
-- [ ] **Step 7: Full API Routes, MQTT Worker, Simulator & Emails**
-  - [ ] `/api/auth/*` (Sign up, OTP verification, Login)
-  - [ ] `/api/borrow` and `/api/return` with MQTT publish & simulation fallback
-  - [ ] Background worker `worker/mqtt-listener.ts` listening to `astrix/uom/kiosk-01/#`
-  - [ ] Resend email dispatch pipeline (OTP, rental confirmation, return receipt)
-  - [ ] Update `/firmware/mock_esp32.js` for `astrix/uom/kiosk-01/*` topics
+- [x] **Step 7: Full API Routes, MQTT Worker, Simulator & Emails**
+  - [x] `/api/auth/*` (Sign up, OTP verification, Login)
+  - [x] `/api/borrow` and `/api/return` with MQTT publish & simulation fallback
+  - [x] Background worker `worker/mqtt-listener.ts` listening to `astrix/uom/kiosk-01/#`
+  - [x] Resend email dispatch pipeline (OTP, rental confirmation, return receipt)
+  - [x] Update `/firmware/mock_esp32.js` for `astrix/uom/kiosk-01/*` topics
 
 ---
 

@@ -3,7 +3,7 @@
 import React, { useState, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Camera, Upload, Sparkles, CheckCircle2, AlertTriangle, RefreshCw, Sun, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Camera, Upload, CheckCircle2, AlertTriangle, RefreshCw, ShieldCheck, ArrowRight } from 'lucide-react';
 import { useViewMode } from '@/components/ViewModeContext';
 
 export default function UploadIdPage() {
@@ -104,10 +104,9 @@ export default function UploadIdPage() {
       {/* Top Header */}
       <div className="pt-2 space-y-3">
         <div className="flex items-center justify-between">
-          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-sky-50 text-sky-700 text-xs font-semibold border border-sky-100">
-            <Sparkles className="w-3.5 h-3.5 text-sky-500" />
-            <span>Step 1 of 2: ID Verification</span>
-          </div>
+          <span className="text-xs font-semibold text-slate-500">
+            Step 1 of 2
+          </span>
 
           {!isStudentMode && (
             <div className="flex items-center space-x-1">
@@ -134,7 +133,7 @@ export default function UploadIdPage() {
         <div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight">Upload Student ID</h1>
           <p className="text-xs text-slate-500">
-            Please capture or upload a clear, legible photo of your University of Moratuwa student card.
+            Please upload a clear photo of your student ID card.
           </p>
         </div>
       </div>
@@ -182,14 +181,9 @@ export default function UploadIdPage() {
         >
           {isProcessing ? (
             <div className="py-8 flex flex-col items-center justify-center space-y-3">
-              <div className="relative w-16 h-16">
-                <div className="w-16 h-16 border-4 border-sky-200 border-t-sky-600 rounded-full animate-spin" />
-                <div className="absolute inset-0 flex items-center justify-center text-sky-600">
-                  <Sparkles className="w-6 h-6 animate-pulse" />
-                </div>
-              </div>
-              <p className="font-bold text-slate-800 text-sm">AI Checking Image Clarity...</p>
-              <p className="text-xs text-slate-400">Verifying Index Number and Student Details</p>
+              <div className="w-12 h-12 border-4 border-sky-200 border-t-sky-600 rounded-full animate-spin" />
+              <p className="font-bold text-slate-800 text-sm">Checking photo clarity...</p>
+              <p className="text-xs text-slate-400">Reading Index Number and Details</p>
             </div>
           ) : idPhotoPreview ? (
             <div className="space-y-3 w-full">
@@ -225,25 +219,19 @@ export default function UploadIdPage() {
           )}
         </div>
 
-        {/* Quality Guidelines Card */}
-        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2">
+        {/* Simple Guidelines */}
+        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2.5 text-xs text-slate-600">
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-            For Best OCR Accuracy:
+            Tips for Quick Approval:
           </p>
-          <ul className="text-xs text-slate-600 space-y-1.5 leading-relaxed">
-            <li className="flex items-center space-x-2">
-              <Sun className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-              <span>Use bright, even lighting (avoid flash glare)</span>
-            </li>
-            <li className="flex items-center space-x-2">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-              <span>Ensure your Index No. and Name are clearly legible</span>
-            </li>
-            <li className="flex items-center space-x-2">
-              <CheckCircle2 className="w-3.5 h-3.5 text-sky-500 shrink-0" />
-              <span>Place the card flat on a dark surface</span>
-            </li>
-          </ul>
+          <div className="flex items-center space-x-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Use good lighting without flash glare</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Make sure your Index Number and Name are visible</span>
+          </div>
         </div>
       </div>
 

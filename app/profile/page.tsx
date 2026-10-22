@@ -14,7 +14,6 @@ import {
   Award,
   LogOut,
   ChevronRight,
-  Sparkles,
   CheckCircle2,
   AlertCircle,
 } from 'lucide-react';
@@ -32,10 +31,10 @@ interface StudentProfile {
 export default function ProfilePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<StudentProfile>({
-    index_no: '210042A',
-    username: 'K. A. Nimal Perera',
-    email: '210042a@uom.lk',
-    address: 'Mora-Villa, Katubedda, Moratuwa',
+    index_no: 'DEV001',
+    username: 'Developer Account',
+    email: 'dev@astrix.uom.lk',
+    address: 'ENTC Dept, University of Moratuwa',
     is_verified: true,
   });
 
@@ -50,7 +49,7 @@ export default function ProfilePage() {
   useEffect(() => {
     const fetchUserData = async () => {
       // 1. Try reading from active session in localStorage
-      let currentIndex = '210042A';
+      let currentIndex = 'DEV001';
       try {
         const raw = localStorage.getItem('astrix_user');
         if (raw) {
@@ -130,13 +129,8 @@ export default function ProfilePage() {
     <div className="flex-1 flex flex-col justify-between bg-slate-50 select-none overflow-y-auto">
       {/* Top Header & Avatar Card */}
       <div className="p-6 space-y-4">
-        {/* Top Badges */}
-        <div className="flex items-center justify-between">
-          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-sky-100/80 text-sky-800 text-xs font-semibold">
-            <Sparkles className="w-3.5 h-3.5 text-sky-600" />
-            <span>University of Moratuwa</span>
-          </div>
-
+        {/* Top Status */}
+        <div className="flex items-center justify-end">
           <span className="inline-flex items-center space-x-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             <span>Active Student</span>
@@ -223,7 +217,7 @@ export default function ProfilePage() {
               <div className="text-xs">
                 <p className="font-bold text-slate-900">No Active Loans</p>
                 <p className="text-slate-500 text-[11px]">
-                  You are ready to borrow an umbrella at any kiosk.
+                  You are ready to borrow an umbrella at any station.
                 </p>
               </div>
             </div>

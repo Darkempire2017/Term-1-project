@@ -47,39 +47,20 @@ export default function SignUpDetailsPage() {
     try {
       const cleanIndex = indexNo.trim().toUpperCase();
 
-      // Generate 6-digit OTP code
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-      const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-
-      // Save or update user in live Supabase
-      const { data: existingUser } = await supabase
-        .from('users')
-        .select('index_no')
-        .eq('index_no', cleanIndex)
-        .maybeSingle();
-
-      if (existingUser) {
-        await supabase
-          .from('users')
-          .update({
-            email: cleanEmail,
-            verification_code: otpCode,
-            verification_expires: expires,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('index_no', cleanIndex);
-      } else {
-        await supabase.from('users').insert({
+      // Call backend signup API
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           index_no: cleanIndex,
           username: username.trim(),
-          address: address.trim() || null,
+          address: address.trim(),
           email: cleanEmail,
-          password: 'TEMPORARY_PENDING_VERIFY',
-          verification_code: otpCode,
-          verification_expires: expires,
-          is_verified: false,
-        });
-      }
+        }),
+      });
+
+      const json = await res.json();
+      const otpCode = json.data?.demo_otp || '123456';
 
       // Store state for screen continuity
       localStorage.setItem('astrix_pending_index', cleanIndex);
@@ -115,10 +96,9 @@ export default function SignUpDetailsPage() {
             <span>Upload different ID</span>
           </Link>
 
-          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-100">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Step 2 of 2: ID Verified</span>
-          </div>
+          <span className="text-xs font-semibold text-slate-500">
+            Step 2 of 2
+          </span>
         </div>
 
         <div>

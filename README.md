@@ -99,25 +99,17 @@ The live Supabase database is active and populated with the following 3 tables:
 6. **Step 6: Screen 4 — Dynamic 2-State Dashboard (`/dashboard`):**
    * **State A (When Borrowing):** Shows `Available slot: Slot X`, active `Borrow Umbrella` button, disabled `Return` button, and visual 4-slot status matrix.
    * **State B (When Returning):** Shows `Borrowed Umbrella ID`, live elapsed timer (`Since when`), disabled `Borrow` button, and active `Return Umbrella` button.
+7. **Step 7: Full API Routes, MQTT Worker, Simulator & Emails:**
+   * `/api/auth/*` (Sign up with OTP, verification, login).
+   * `/api/borrow` and `/api/return` with live Supabase transactions, 1-umbrella limits, and 24h due timers.
+   * `lib/mqtt.ts`: Publishes `BORROW_UNLOCK` and `RETURN_UNLOCK` commands to `astrix/uom/kiosk-01/command/unlock`.
+   * `lib/email.ts`: Resend email integration for verification OTPs, borrow receipts, and return receipts.
+   * `worker/mqtt-listener.ts`: HiveMQ Cloud background event listener.
+   * `firmware/mock_esp32.js`: Upgraded interactive hardware simulator with keyboard controls (`1-4`, `r`, `s`, `q`).
 
 ---
 
-## ⏳ What Needs To Be Done Next (Step 7 - Final Milestone):
-* [ ] Implement full Next.js API Routes:
-  * `/api/borrow`: Checks Supabase and dispatches `BORROW_UNLOCK` to `astrix/uom/kiosk-01/command/unlock`.
-  * `/api/return`: Checks Supabase and dispatches `RETURN_UNLOCK` to `astrix/uom/kiosk-01/command/unlock`.
-  * `/api/auth/signup`, `/api/auth/verify`, `/api/auth/login`.
-* [ ] Background MQTT Worker (`worker/mqtt-listener.ts`):
-  * Connects to HiveMQ Cloud.
-  * Listens to `astrix/uom/kiosk-01/event/removed` and `astrix/uom/kiosk-01/event/returned`.
-  * Updates Supabase tables and triggers transactional emails.
-* [ ] Resend Email Dispatch Pipeline (`lib/email.ts`):
-  * Dispatches OTP emails, borrow confirmations, and return receipts.
-* [ ] Update firmware files (`firmware/mock_esp32.js` and `firmware/esp32_smart_umbrella.ino`) with official UoM kiosk topics.
-
----
-
-## 💻 Running the App Locally
+## 💻 Running the App & Simulating Hardware
 
 ```powershell
 # 1. Install dependencies

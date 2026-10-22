@@ -8,7 +8,7 @@ import { Umbrella, User, ShieldAlert } from 'lucide-react';
 export const BottomNav: React.FC = () => {
   const pathname = usePathname();
 
-  // Show bottom nav on dashboard, profile, or kiosk views
+  // Show bottom nav on dashboard or profile views
   const isDashboard = pathname === '/dashboard';
   const isProfile = pathname === '/profile';
 

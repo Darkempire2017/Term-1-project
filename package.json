@@ -6,6 +6,7 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "typecheck": "tsc --noEmit",
+    "simulator": "node firmware/mock_esp32.js",
     "start": "next start",
     "lint": "next lint"
   },

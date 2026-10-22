@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { KeyRound, Lock, Eye, EyeOff, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Sparkles, RefreshCw } from 'lucide-react';
+import { KeyRound, Lock, Eye, EyeOff, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useViewMode } from '@/components/ViewModeContext';
 
@@ -116,62 +116,31 @@ function VerifyForm() {
     try {
       const cleanIndex = indexNo.trim().toUpperCase();
 
-      // Check user in Supabase
-      const { data: user, error: dbError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('index_no', cleanIndex)
-        .maybeSingle();
-
-      if (user) {
-        // Validate OTP if user has verification_code
-        if (user.verification_code && user.verification_code !== fullOtp && fullOtp !== '123456') {
-          setError('Invalid verification code. Please check and try again.');
-          setLoading(false);
-          return;
-        }
-
-        // Update password and set is_verified to true
-        await supabase
-          .from('users')
-          .update({
-            password: newPassword,
-            is_verified: true,
-            verification_code: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('index_no', cleanIndex);
-
-        // Store active session
-        localStorage.setItem(
-          'astrix_user',
-          JSON.stringify({
-            index_no: user.index_no,
-            username: user.username,
-            email: user.email,
-          })
-        );
-      } else {
-        // First-time demo setup fallback
-        const demoName = localStorage.getItem('astrix_pending_name') || 'K. A. Nimal Perera';
-        await supabase.from('users').upsert({
+      const res = await fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           index_no: cleanIndex,
-          username: demoName,
-          email: email.trim().toLowerCase(),
+          code: fullOtp,
           password: newPassword,
-          is_verified: true,
-          updated_at: new Date().toISOString(),
-        });
+        }),
+      });
 
-        localStorage.setItem(
-          'astrix_user',
-          JSON.stringify({
-            index_no: cleanIndex,
-            username: demoName,
-            email: email.trim().toLowerCase(),
-          })
-        );
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        setError(json.message || 'Verification failed. Please check the code and try again.');
+        setLoading(false);
+        return;
       }
+
+      const verifiedUser = json.user || {
+        index_no: cleanIndex,
+        username: localStorage.getItem('astrix_pending_name') || 'K. A. Nimal Perera',
+        email: email.trim().toLowerCase(),
+      };
+
+      localStorage.setItem('astrix_user', JSON.stringify(verifiedUser));
 
       setSuccess('Account verified & password set! Redirecting to Sign In...');
       setTimeout(() => {
@@ -206,10 +175,9 @@ function VerifyForm() {
             <button
               type="button"
               onClick={handleFillDemoOtp}
-              className="text-[11px] text-sky-600 hover:text-sky-700 font-bold bg-sky-50 hover:bg-sky-100/80 px-2.5 py-1 rounded-lg transition flex items-center space-x-1"
+              className="text-[11px] text-sky-600 hover:text-sky-700 font-bold bg-sky-50 hover:bg-sky-100/80 px-2.5 py-1 rounded-lg transition"
             >
-              <Sparkles className="w-3 h-3 text-sky-500" />
-              <span>Fill Code ({demoOtpHint})</span>
+              Fill Code ({demoOtpHint})
             </button>
           )}
         </div>

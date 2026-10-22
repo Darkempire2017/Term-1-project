@@ -89,6 +89,36 @@ function getProcessedCanvas(img: HTMLImageElement, angle: number): HTMLCanvasEle
 }
 
 /**
+ * Clean a single address line by removing photo-edge margin artifacts,
+ * barcode noise, stray punctuation, and symbols.
+ */
+function cleanAddressLine(line: string): string {
+  let cleaned = line.trim();
+
+  // 1. Strip leading non-alphanumeric noise (symbols, pipes, dashes, slashes, equals)
+  cleaned = cleaned.replace(/^[^a-zA-Z0-9]+/, '');
+
+  // 2. Strip trailing noise (symbols, quotes, parentheses, pipes, tildes)
+  cleaned = cleaned.replace(/[^a-zA-Z0-9\.\,]+$/, '');
+
+  // 3. If there's a house number like 241/6/2 with noise before it (e.g. "= 1 241/6/2"), extract from the house number
+  const housePattern = /(\b\d+[\d\/\-A-Za-z]*\s*,?.*)/;
+  const match = cleaned.match(housePattern);
+  if (match && cleaned.indexOf(match[1]) <= 6) {
+    cleaned = match[1];
+  }
+
+  // 4. Strip leading 1-2 character isolated tokens like '8 7a ' or 'T ' from photo edge,
+  // except standard abbreviations like 'No.' or 'St.'
+  cleaned = cleaned.replace(/^(?!(?:no\.?|st\.?)\b)[a-zA-Z0-9]{1,2}\s+(?:[a-zA-Z0-9]{1,2}\s+)*/i, '');
+
+  // 5. Strip trailing punctuation / brackets / noise
+  cleaned = cleaned.replace(/[\s\)\(\~\|\=\_\§\™\“\”\.\,]+$/, '').trim();
+
+  return cleaned;
+}
+
+/**
  * Parse OCR raw text specifically for University of Moratuwa ID cards
  */
 export function parseMoratuwaIdText(text: string): {
@@ -115,7 +145,7 @@ export function parseMoratuwaIdText(text: string): {
   // 2. Look for student name
   // Typically printed on the line right before or above the index number (e.g. "JITHWIN P.K.D.R." or "K. A. NIMAL PERERA")
   let username: string | null = null;
-  const ignoreKeywords = ['UNIVERSITY', 'MORATUWA', 'STUDENT', 'IDENTITY', 'CARD', 'SRI LANKA', 'FACULTY'];
+  const ignoreKeywords = ['UNIVERSITY', 'MORATUWA', 'STUDENT', 'IDENTITY', 'CARD', 'SRI LANKA', 'FACULTY', 'VALID', 'NIC'];
 
   if (indexLineIdx > 0) {
     for (let i = indexLineIdx - 1; i >= 0; i--) {
@@ -144,24 +174,63 @@ export function parseMoratuwaIdText(text: string): {
     }
   }
 
+  // Clean student name from photo-edge or symbol artifacts
+  if (username) {
+    username = username
+      .replace(/^[^a-zA-Z]+/, '')
+      .replace(/[^a-zA-Z\.\s]+$/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   // 3. Look for residential address
   // Usually printed on the lines following the index number up to "NIC No:" or signature
   let address: string | null = null;
+  const stopKeywords = [
+    'NIC',
+    'SIGNATURE',
+    'HOLDER',
+    'VALID',
+    'EXPIRE',
+    'DEC',
+    'JAN',
+    'FEB',
+    'MAR',
+    'APR',
+    'MAY',
+    'JUN',
+    'JUL',
+    'AUG',
+    'SEP',
+    'OCT',
+    'NOV',
+    'DATE',
+    'ISSUE',
+  ];
+
   if (indexLineIdx !== -1 && indexLineIdx < lines.length - 1) {
     const addressLines: string[] = [];
     for (let i = indexLineIdx + 1; i < lines.length; i++) {
       const line = lines[i];
       const upper = line.toUpperCase();
-      if (upper.includes('NIC') || upper.includes('SIGNATURE') || upper.includes('VALID') || upper.includes('EXPIRE')) {
+      if (stopKeywords.some((kw) => upper.includes(kw))) {
         break;
       }
-      // Common Sri Lankan address markers or commas/numbers
-      if (line.length > 3) {
-        addressLines.push(line);
+
+      const cleaned = cleanAddressLine(line);
+      // Must contain at least one meaningful word (filters out separator lines like "~ k |")
+      if (/[a-zA-Z]{3,}/.test(cleaned)) {
+        addressLines.push(cleaned);
       }
     }
+
     if (addressLines.length > 0) {
-      address = addressLines.join(', ').replace(/\s+/g, ' ').replace(/,\s*,/g, ',');
+      address = addressLines
+        .join(', ')
+        .replace(/\s+/g, ' ')
+        .replace(/,\s*,/g, ',')
+        .replace(/,\s*$/, '')
+        .trim();
     }
   }
 

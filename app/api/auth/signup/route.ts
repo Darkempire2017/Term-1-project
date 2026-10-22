@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabase';
 import { sendVerificationOtpEmail } from '@/lib/email';
+import { createVerificationToken } from '@/lib/auth-token';
 
 export async function POST(request: Request) {
   try {
@@ -21,26 +21,23 @@ export async function POST(request: Request) {
 
     // Generate secure 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes
 
-    // Upsert student into Supabase users table
-    const { error: dbError } = await supabaseAdmin.from('users').upsert({
+    // Create tamper-proof signed token — Zero unverified rows in users table!
+    const verificationToken = createVerificationToken({
       index_no: cleanIndex,
       username: cleanName,
       address: cleanAddress,
       email: cleanEmail,
-      verification_code: otp,
-      verification_expires: expiresAt,
-      is_verified: false,
-      updated_at: new Date().toISOString(),
+      otp,
+      expires_at: expiresAt,
     });
 
-    if (dbError) {
-      console.warn('⚠️ [API/Auth/Signup] Supabase upsert note:', dbError.message);
+    // Dispatch verification OTP email via Gmail SMTP
+    const emailResult = await sendVerificationOtpEmail(cleanEmail, cleanName, otp);
+    if (!emailResult.success) {
+      console.warn('⚠️ [API/Auth/Signup] Email delivery warning:', emailResult.error);
     }
-
-    // Dispatch verification OTP email
-    await sendVerificationOtpEmail(cleanEmail, cleanName, otp);
 
     return NextResponse.json({
       success: true,
@@ -48,7 +45,7 @@ export async function POST(request: Request) {
       data: {
         index_no: cleanIndex,
         email: cleanEmail,
-        demo_otp: otp,
+        verification_token: verificationToken,
       },
     });
   } catch (error: any) {

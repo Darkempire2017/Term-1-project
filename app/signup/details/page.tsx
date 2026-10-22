@@ -66,13 +66,20 @@ export default function SignUpDetailsPage() {
       });
 
       const json = await res.json();
-      const otpCode = json.data?.demo_otp || '123456';
 
-      // Store state for screen continuity
+      if (!res.ok || !json.success) {
+        setError(json.message || 'Unable to send verification code. Please try again.');
+        setLoading(false);
+        return;
+      }
+
+      // Store token and pending data for /verify
+      if (json.data?.verification_token) {
+        localStorage.setItem('astrix_verification_token', json.data.verification_token);
+      }
       localStorage.setItem('astrix_pending_index', cleanIndex);
       localStorage.setItem('astrix_pending_email', cleanEmail);
       localStorage.setItem('astrix_pending_name', username.trim());
-      localStorage.setItem('astrix_demo_otp', otpCode);
 
       // Navigate to /verify
       router.push(`/verify?index_no=${encodeURIComponent(cleanIndex)}&email=${encodeURIComponent(cleanEmail)}`);

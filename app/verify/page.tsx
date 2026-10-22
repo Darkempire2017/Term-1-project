@@ -116,6 +116,8 @@ function VerifyForm() {
     try {
       const cleanIndex = indexNo.trim().toUpperCase();
 
+      const verificationToken = localStorage.getItem('astrix_verification_token') || undefined;
+
       const res = await fetch('/api/auth/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -123,6 +125,7 @@ function VerifyForm() {
           index_no: cleanIndex,
           code: fullOtp,
           password: newPassword,
+          verification_token: verificationToken,
         }),
       });
 
@@ -133,6 +136,9 @@ function VerifyForm() {
         setLoading(false);
         return;
       }
+
+      // Cleanup pending token
+      localStorage.removeItem('astrix_verification_token');
 
       const verifiedUser = json.user || {
         index_no: cleanIndex,

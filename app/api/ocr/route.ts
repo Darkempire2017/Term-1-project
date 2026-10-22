@@ -154,6 +154,8 @@ Respond ONLY with valid JSON.
         error_type: 'SERVICE_BUSY',
         message: 'Student verification service is momentarily busy. Please try uploading again in a few moments.',
         error_details: aiError?.message || String(aiError),
+        debug_key_length: cleanApiKey.length,
+        debug_key_preview: `${cleanApiKey.slice(0, 5)}...${cleanApiKey.slice(-5)}`,
       });
     }
   } catch (error: any) {

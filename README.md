@@ -31,7 +31,6 @@ The live Supabase database is active and populated with the following 3 tables:
 ### 1. `users` Table
 * `index_no` (`VARCHAR(50)`, Primary Key) — Student Index Number (e.g. `210042A`)
 * `username` (`VARCHAR(100)`) — Student Full Name (locked from ID card)
-* `address` (`TEXT`) — Hall or Residential Address (locked from ID card)
 * `email` (`VARCHAR(255)`) — Editable student contact email
 * `password` (`VARCHAR(255)`) — Encrypted account password
 * `verification_code` (`VARCHAR(10)`) — 6-digit OTP

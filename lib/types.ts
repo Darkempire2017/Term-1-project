@@ -6,7 +6,6 @@
 export interface User {
   index_no: string;
   username: string;
-  address?: string | null;
   email: string;
   password?: string;
   verification_code?: string | null;

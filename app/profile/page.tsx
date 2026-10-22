@@ -23,7 +23,6 @@ interface StudentProfile {
   index_no: string;
   username: string;
   email: string;
-  address?: string | null;
   is_verified?: boolean;
 }
 
@@ -33,7 +32,6 @@ export default function ProfilePage() {
     index_no: 'DEV001',
     username: 'Developer Account',
     email: 'dev@astrix.uom.lk',
-    address: 'ENTC Dept, University of Moratuwa',
     is_verified: true,
   });
 
@@ -80,7 +78,6 @@ export default function ProfilePage() {
             index_no: dbUser.index_no,
             username: dbUser.username,
             email: dbUser.email,
-            address: dbUser.address || 'Katubedda, Moratuwa',
             is_verified: dbUser.is_verified ?? true,
           });
         }

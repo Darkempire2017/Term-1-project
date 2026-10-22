@@ -28,35 +28,36 @@ export async function POST(request: Request) {
       console.warn('⚠️ [API/Auth/Login] DB lookup error:', dbError.message);
     }
 
-    if (user) {
-      const isValid = user.password ? verifyPassword(cleanPassword, user.password) : true;
-      if (!isValid) {
-        return NextResponse.json(
-          { success: false, message: 'Invalid password. Please check your credentials.' },
-          { status: 401 }
-        );
-      }
-
-      return NextResponse.json({
-        success: true,
-        message: 'Signed in successfully.',
-        user: {
-          index_no: user.index_no,
-          username: user.username,
-          email: user.email,
-        },
-      });
+    if (!user) {
+      return NextResponse.json(
+        { success: false, message: 'No account found with this Index Number. Please sign up first.' },
+        { status: 404 }
+      );
     }
 
-    // Fallback for first-time demo test sessions
-    const demoName = cleanIndex === '210042A' ? 'K. A. Nimal Perera' : `Student ${cleanIndex}`;
+    if (!user.is_verified) {
+      return NextResponse.json(
+        { success: false, message: 'Your account is not verified yet. Please complete signup verification.' },
+        { status: 403 }
+      );
+    }
+
+    // Verify hashed password
+    const isValid = user.password ? verifyPassword(cleanPassword, user.password) : false;
+    if (!isValid) {
+      return NextResponse.json(
+        { success: false, message: 'Invalid password. Please check your credentials.' },
+        { status: 401 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
-      message: 'Signed in (Demo Mode).',
+      message: 'Signed in successfully.',
       user: {
-        index_no: cleanIndex,
-        username: demoName,
-        email: `${cleanIndex.toLowerCase()}@uom.lk`,
+        index_no: user.index_no,
+        username: user.username,
+        email: user.email,
       },
     });
   } catch (error: any) {

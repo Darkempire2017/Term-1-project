@@ -55,9 +55,8 @@
 | :--- | :--- | :--- |
 | `index_no` | `VARCHAR(50)` | Primary Key (e.g. `210042A`) |
 | `username` | `VARCHAR(100)` | Full student name |
-| `address` | `TEXT` | Residential or hall address |
 | `email` | `VARCHAR(255)` | Student email |
-| `password` | `VARCHAR(255)` | Hashed password |
+| `password` | `VARCHAR(255)` | Hashed password (`scrypt`) |
 | `verification_code` | `VARCHAR(10)` | 6-digit OTP |
 | `verification_expires` | `TIMESTAMPTZ` | OTP expiration timestamp |
 | `is_verified` | `BOOLEAN` | Default `false` |

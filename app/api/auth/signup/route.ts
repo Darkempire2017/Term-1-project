@@ -5,12 +5,11 @@ import { createVerificationToken } from '@/lib/auth-token';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { index_no, username, address, email } = body;
+    const { index_no, username, email } = body;
 
     const cleanIndex = index_no?.trim().toUpperCase();
     const cleanEmail = email?.trim().toLowerCase();
     const cleanName = username?.trim() || 'Student';
-    const cleanAddress = address?.trim() || 'Katubedda, Moratuwa';
 
     if (!cleanIndex || !cleanEmail) {
       return NextResponse.json(
@@ -27,7 +26,6 @@ export async function POST(request: Request) {
     const verificationToken = createVerificationToken({
       index_no: cleanIndex,
       username: cleanName,
-      address: cleanAddress,
       email: cleanEmail,
       otp,
       expires_at: expiresAt,

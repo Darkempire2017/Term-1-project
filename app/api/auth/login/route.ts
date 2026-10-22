@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
+import { verifyPassword } from '@/lib/password';
 
 export async function POST(request: Request) {
   try {
@@ -28,7 +29,8 @@ export async function POST(request: Request) {
     }
 
     if (user) {
-      if (user.password && user.password !== cleanPassword) {
+      const isValid = user.password ? verifyPassword(cleanPassword, user.password) : true;
+      if (!isValid) {
         return NextResponse.json(
           { success: false, message: 'Invalid password. Please check your credentials.' },
           { status: 401 }

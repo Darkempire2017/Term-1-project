@@ -3,7 +3,6 @@ import crypto from 'crypto';
 export interface PendingSignupPayload {
   index_no: string;
   username: string;
-  address: string;
   email: string;
   otp: string;
   expires_at: number;
@@ -28,7 +27,7 @@ export function verifyVerificationToken(token: string): PendingSignupPayload | n
   try {
     const envelopeStr = Buffer.from(token, 'base64url').toString('utf8');
     const envelope = JSON.parse(envelopeStr);
-    
+
     if (!envelope.data || !envelope.sig) return null;
 
     const expectedSig = crypto.createHmac('sha256', SECRET).update(envelope.data).digest('hex');

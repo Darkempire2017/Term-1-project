@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { verifyVerificationToken } from '@/lib/auth-token';
+import { hashPassword } from '@/lib/password';
 
 export async function POST(request: Request) {
   try {
@@ -28,7 +29,6 @@ export async function POST(request: Request) {
     let studentData: {
       index_no: string;
       username: string;
-      address: string;
       email: string;
     } | null = null;
 
@@ -59,7 +59,6 @@ export async function POST(request: Request) {
       studentData = {
         index_no: payload.index_no,
         username: payload.username,
-        address: payload.address,
         email: payload.email,
       };
     } else {
@@ -87,20 +86,20 @@ export async function POST(request: Request) {
       studentData = {
         index_no: user.index_no,
         username: user.username,
-        address: user.address || 'Katubedda, Moratuwa',
         email: user.email,
       };
     }
 
-    // 3. Insert or update the COMPLETE verified student account in Supabase
+    // 3. Hash password and insert the verified student account in Supabase
+    const hashedPassword = hashPassword(newPassword);
+
     const { error: upsertError } = await supabaseAdmin
       .from('users')
       .upsert({
         index_no: studentData.index_no,
         username: studentData.username,
-        address: studentData.address,
         email: studentData.email,
-        password: newPassword,
+        password: hashedPassword,
         is_verified: true,
         verification_code: null,
         verification_expires: null,

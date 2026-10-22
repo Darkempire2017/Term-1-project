@@ -7,7 +7,6 @@ import {
   User,
   Hash,
   Mail,
-  MapPin,
   ShieldCheck,
   Umbrella,
   Clock,
@@ -243,17 +242,6 @@ export default function ProfilePage() {
             </div>
             <span className="font-medium text-slate-800 truncate max-w-[180px]">
               {profile.email}
-            </span>
-          </div>
-
-          {/* Address */}
-          <div className="p-3.5 flex items-center justify-between text-xs">
-            <div className="flex items-center space-x-3 text-slate-500">
-              <MapPin className="w-4 h-4 text-slate-400" />
-              <span>Address / Hall</span>
-            </div>
-            <span className="font-medium text-slate-800 truncate max-w-[180px]">
-              {profile.address || 'Katubedda, Moratuwa'}
             </span>
           </div>
         </div>

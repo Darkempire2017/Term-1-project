@@ -9,7 +9,6 @@ export interface OcrResult {
   success: boolean;
   username?: string;
   index_no?: string;
-  address?: string;
   confidence?: number;
   rotationUsed?: number;
   rawText?: string;
@@ -49,7 +48,7 @@ function getProcessedCanvas(img: HTMLImageElement, angle: number): HTMLCanvasEle
   const srcWidth = img.naturalWidth || img.width;
   const srcHeight = img.naturalHeight || img.height;
 
-  // Scale down oversized mobile photos (e.g. 4000x3000) to max 1600px for high speed and lower memory
+  // Scale down oversized mobile photos to max 1600px for speed and memory efficiency
   const maxDim = 1600;
   let scale = 1;
   if (Math.max(srcWidth, srcHeight) > maxDim) {
@@ -73,7 +72,6 @@ function getProcessedCanvas(img: HTMLImageElement, angle: number): HTMLCanvasEle
     const data = imgData.data;
     for (let i = 0; i < data.length; i += 4) {
       const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      // Mild contrast stretch
       const contrasted = (gray - 128) * 1.15 + 128;
       const clamped = Math.max(0, Math.min(255, contrasted));
       data[i] = clamped;
@@ -89,33 +87,31 @@ function getProcessedCanvas(img: HTMLImageElement, angle: number): HTMLCanvasEle
 }
 
 /**
- * Clean a single address line by removing photo-edge margin artifacts,
- * barcode noise, stray punctuation, and symbols.
+ * Clean student name by stripping photo-edge noise, trailing labels (e.g. 'tose:'),
+ * colons, and stray non-alphabetic characters.
  */
-function cleanAddressLine(line: string): string {
-  let cleaned = line.trim();
+export function cleanStudentName(raw: string): string {
+  // Strip non-letter prefix/suffix
+  const cleaned = raw.replace(/^[^a-zA-Z]+/, '').replace(/[^a-zA-Z\.]+$/, '');
+  const tokens = cleaned.split(/\s+/);
+  const cleanTokens: string[] = [];
 
-  // 1. Strip leading non-alphanumeric noise (symbols, pipes, dashes, slashes, equals)
-  cleaned = cleaned.replace(/^[^a-zA-Z0-9]+/, '');
-
-  // 2. Strip trailing noise (symbols, quotes, parentheses, pipes, tildes)
-  cleaned = cleaned.replace(/[^a-zA-Z0-9\.\,]+$/, '');
-
-  // 3. If there's a house number like 241/6/2 with noise before it (e.g. "= 1 241/6/2"), extract from the house number
-  const housePattern = /(\b\d+[\d\/\-A-Za-z]*\s*,?.*)/;
-  const match = cleaned.match(housePattern);
-  if (match && cleaned.indexOf(match[1]) <= 6) {
-    cleaned = match[1];
+  for (const token of tokens) {
+    // If token has colons or is a header/metadata word (e.g. 'tose:', 'name:', 'index:')
+    if (token.includes(':') || /^(name|index|no|card|student|faculty|department|valid|until|nic)$/i.test(token)) {
+      continue;
+    }
+    // Reject lowercase words (like 'tose', 'course', or edge noise)
+    if (/^[a-z]+$/.test(token)) {
+      continue;
+    }
+    const t = token.replace(/^[^a-zA-Z]+/, '').replace(/[^a-zA-Z\.]+$/, '');
+    if (t.length >= 1 && /[a-zA-Z]/.test(t)) {
+      cleanTokens.push(t.toUpperCase());
+    }
   }
 
-  // 4. Strip leading 1-2 character isolated tokens like '8 7a ' or 'T ' from photo edge,
-  // except standard abbreviations like 'No.' or 'St.'
-  cleaned = cleaned.replace(/^(?!(?:no\.?|st\.?)\b)[a-zA-Z0-9]{1,2}\s+(?:[a-zA-Z0-9]{1,2}\s+)*/i, '');
-
-  // 5. Strip trailing punctuation / brackets / noise
-  cleaned = cleaned.replace(/[\s\)\(\~\|\=\_\§\™\“\”\.\,]+$/, '').trim();
-
-  return cleaned;
+  return cleanTokens.join(' ').trim();
 }
 
 /**
@@ -124,14 +120,13 @@ function cleanAddressLine(line: string): string {
 export function parseMoratuwaIdText(text: string): {
   index_no: string | null;
   username: string | null;
-  address: string | null;
 } {
-  // 1. Index number pattern: 6 digits + 1 uppercase letter (e.g. 250312H, 210042A)
+  // 1. Index number pattern: 6 digits + 1 uppercase letter (e.g. 250312H, 250405V, 210042A)
   const indexMatch = text.match(/\b([0-9]{6}[A-Z])\b/i);
   const index_no = indexMatch ? indexMatch[1].toUpperCase() : null;
 
   if (!index_no) {
-    return { index_no: null, username: null, address: null };
+    return { index_no: null, username: null };
   }
 
   // Split lines and clean up noise
@@ -143,9 +138,20 @@ export function parseMoratuwaIdText(text: string): {
   const indexLineIdx = lines.findIndex((l) => l.toUpperCase().includes(index_no));
 
   // 2. Look for student name
-  // Typically printed on the line right before or above the index number (e.g. "JITHWIN P.K.D.R." or "K. A. NIMAL PERERA")
-  let username: string | null = null;
-  const ignoreKeywords = ['UNIVERSITY', 'MORATUWA', 'STUDENT', 'IDENTITY', 'CARD', 'SRI LANKA', 'FACULTY', 'VALID', 'NIC'];
+  // Typically printed on the line right before or above the index number
+  let rawUsername: string | null = null;
+  const ignoreKeywords = [
+    'UNIVERSITY',
+    'MORATUWA',
+    'STUDENT',
+    'IDENTITY',
+    'CARD',
+    'SRI LANKA',
+    'FACULTY',
+    'DEPARTMENT',
+    'VALID',
+    'NIC',
+  ];
 
   if (indexLineIdx > 0) {
     for (let i = indexLineIdx - 1; i >= 0; i--) {
@@ -153,91 +159,32 @@ export function parseMoratuwaIdText(text: string): {
       const upper = candidate.toUpperCase();
       const hasIgnore = ignoreKeywords.some((kw) => upper.includes(kw));
       // Must contain letters and not be a header line
-      if (!hasIgnore && /[A-Z]/.test(upper)) {
-        username = candidate;
+      if (!hasIgnore && /[A-Z]/i.test(candidate)) {
+        rawUsername = candidate;
         break;
       }
     }
   }
 
-  // Fallback: look for line with initials pattern (e.g., "P.K.D.R." or "A. B. C.")
-  if (!username) {
+  // Fallback: search for line with initials pattern (e.g., "P.K.D.R." or "U.D.S." or "A. B.")
+  if (!rawUsername) {
     for (const line of lines) {
       if (line.includes(index_no)) continue;
       if (/\b[A-Z]\.[A-Z\.]+/i.test(line) || /\b[A-Z]{3,}\s+[A-Z\.]+/i.test(line)) {
         const upper = line.toUpperCase();
         if (!ignoreKeywords.some((kw) => upper.includes(kw))) {
-          username = line;
+          rawUsername = line;
           break;
         }
       }
     }
   }
 
-  // Clean student name from photo-edge or symbol artifacts
-  if (username) {
-    username = username
-      .replace(/^[^a-zA-Z]+/, '')
-      .replace(/[^a-zA-Z\.\s]+$/, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  // 3. Look for residential address
-  // Usually printed on the lines following the index number up to "NIC No:" or signature
-  let address: string | null = null;
-  const stopKeywords = [
-    'NIC',
-    'SIGNATURE',
-    'HOLDER',
-    'VALID',
-    'EXPIRE',
-    'DEC',
-    'JAN',
-    'FEB',
-    'MAR',
-    'APR',
-    'MAY',
-    'JUN',
-    'JUL',
-    'AUG',
-    'SEP',
-    'OCT',
-    'NOV',
-    'DATE',
-    'ISSUE',
-  ];
-
-  if (indexLineIdx !== -1 && indexLineIdx < lines.length - 1) {
-    const addressLines: string[] = [];
-    for (let i = indexLineIdx + 1; i < lines.length; i++) {
-      const line = lines[i];
-      const upper = line.toUpperCase();
-      if (stopKeywords.some((kw) => upper.includes(kw))) {
-        break;
-      }
-
-      const cleaned = cleanAddressLine(line);
-      // Must contain at least one meaningful word (filters out separator lines like "~ k |")
-      if (/[a-zA-Z]{3,}/.test(cleaned)) {
-        addressLines.push(cleaned);
-      }
-    }
-
-    if (addressLines.length > 0) {
-      address = addressLines
-        .join(', ')
-        .replace(/\s+/g, ' ')
-        .replace(/,\s*,/g, ',')
-        .replace(/,\s*$/, '')
-        .trim();
-    }
-  }
+  const username = rawUsername ? cleanStudentName(rawUsername) : null;
 
   return {
     index_no,
-    username: username ? username.trim() : 'University Student',
-    address: address ? address.trim() : 'Katubedda, Moratuwa',
+    username: username && username.length > 2 ? username : 'University Student',
   };
 }
 
@@ -255,7 +202,6 @@ export async function scanStudentIdLocally(
     const img = await loadImage(file);
 
     onProgress?.(25, 'Initializing local OCR engine in browser...');
-    // Dynamically import tesseract.js to keep initial bundle size lean
     const { createWorker } = await import('tesseract.js');
 
     worker = await createWorker('eng', 1, {
@@ -267,14 +213,10 @@ export async function scanStudentIdLocally(
       },
     });
 
-    // Test candidate angles:
-    // 0°: Standard landscape
-    // 270°: Top candidate for vertical smartphone photos of horizontal cards
-    // 90°: Rotated clockwise
-    // 180°: Inverted
+    // Test candidate angles: 0° landscape, 270° portrait, 90°, 180°
     const candidateAngles = [0, 270, 90, 180];
     let bestText = '';
-    let extracted: ReturnType<typeof parseMoratuwaIdText> = { index_no: null, username: null, address: null };
+    let extracted: ReturnType<typeof parseMoratuwaIdText> = { index_no: null, username: null };
     let successfulAngle = 0;
 
     for (let i = 0; i < candidateAngles.length; i++) {
@@ -292,7 +234,7 @@ export async function scanStudentIdLocally(
       if (extracted.index_no) {
         bestText = text;
         successfulAngle = angle;
-        break; // Found valid UoM index number! Immediate early exit for maximum speed.
+        break; // Found valid UoM index number! Immediate early exit.
       }
     }
 
@@ -301,7 +243,8 @@ export async function scanStudentIdLocally(
     if (!extracted.index_no) {
       return {
         success: false,
-        error: "Could not clearly read your Student Index Number. Please ensure the card is well-lit, fully in frame, and not blurry.",
+        error:
+          'Could not clearly read your Student Index Number. Please ensure the card is well-lit, fully in frame, and not blurry.',
       };
     }
 
@@ -309,7 +252,6 @@ export async function scanStudentIdLocally(
       success: true,
       index_no: extracted.index_no,
       username: extracted.username || 'University Student',
-      address: extracted.address || 'Katubedda, Moratuwa',
       rotationUsed: successfulAngle,
       rawText: bestText,
     };

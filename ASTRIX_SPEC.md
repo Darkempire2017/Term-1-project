@@ -17,12 +17,13 @@
   - [x] Create Bottom Navigation Bar (`Dashboard` | `Profile`)
   - [x] Create Floating Dev Nav / State Switcher for rapid multi-screen browser testing
 - [x] **Step 3: Screen 1 — Sign In (`/login`) & 2-Page Sign Up (`/signup` & `/signup/details`)**
-  - [x] `/login`: Index No., Password, Forgot Password, Sign In, Sign Up link
+  - [x] `/login`: Index No., Password with salted cryptographic verification (`lib/password.ts`)
   - [x] `/signup` (Screen 1A): Dedicated ID upload page with 100% private client-side OCR (`lib/ocr-client.ts` via Tesseract.js WASM)
   - [x] Multi-rotation auto-detection (0°, 270°, 90°, 180°) recovering camera-rotated student IDs
-  - [x] `/signup/details` (Screen 1B): Extracted ID fields are UNCHANGEABLE / LOCKED, email is the ONLY editable field
+  - [x] `/signup/details` (Screen 1B): Extracted ID fields (Name & Index) locked, email editable, address field completely removed
   - [x] Tamper-proof HMAC verification token (`lib/auth-token.ts`) ensuring zero unverified database pollution
   - [x] `VERIFY` submission generating OTP and forwarding to `/verify`
+  - [x] Password hashing with random 16-byte salt and `scrypt` for all user accounts
 - [x] **Step 4: Screen 2 — Verify / Reset Password (`/verify`)**
   - [x] 6-digit OTP verification code inputs
   - [x] New Password and Verify Password fields

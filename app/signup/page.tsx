@@ -61,11 +61,9 @@ export default function UploadIdPage() {
       // Success: Save verified data to browser storage for the locked details screen
       const username = result.username || 'University Student';
       const index_no = result.index_no;
-      const address = result.address || 'Katubedda, Moratuwa';
 
       sessionStorage.setItem('astrix_verified_username', username);
       sessionStorage.setItem('astrix_verified_index', index_no);
-      sessionStorage.setItem('astrix_verified_address', address);
       if (idPhotoPreview) {
         sessionStorage.setItem('astrix_verified_photo', idPhotoPreview);
       }
@@ -96,7 +94,6 @@ export default function UploadIdPage() {
     setTimeout(() => {
       sessionStorage.setItem('astrix_verified_username', 'K. A. Nimal Perera');
       sessionStorage.setItem('astrix_verified_index', '210042A');
-      sessionStorage.setItem('astrix_verified_address', 'Mora-Villa, Katubedda, Moratuwa');
       router.push('/signup/details');
     }, 600);
   };

@@ -51,23 +51,33 @@ export async function POST(req: NextRequest) {
       const ai = new GoogleGenAI({ apiKey });
 
       const prompt = `
-You are a strict Student Identity Verification OCR assistant for Sri Lankan university student identity cards (specifically University of Moratuwa - UoM, or other Sri Lankan universities).
+You are an expert OCR assistant for Sri Lankan university student identity cards, specifically the University of Moratuwa (UoM).
 Analyze this photo of a student Identity Card.
 
-Your task:
-1. Check if the image is a clear and legible photo of a student ID card:
-- If the image is blurry, glaring, rotated, too low-resolution, not a student ID, or if the Index Number or Student Name cannot be confidently read, respond with:
+Orientation Handling:
+- The photo may be taken in any orientation (horizontal landscape, vertical portrait, rotated 90 degrees sideways, or upside down).
+- You MUST mentally rotate and read the text in whatever orientation it appears. Do NOT reject an image simply because it is rotated or sideways.
+
+University of Moratuwa Card Layout:
+- Line 1: Student Name with initials (e.g. 'JITHWIN P.K.D.R.', 'K. A. Nimal Perera')
+- Line 2: Student Index Number (e.g. 6 digits followed by a capital letter such as '250312H', '210042A'). Inspect every digit carefully (distinguish between '5' and '3').
+- Lines 3+: Student Address (e.g. street address, town, or department printed on the card)
+
+Rejection Criteria:
+- Only reject if the photo is NOT a student identity card, or if it is so heavily blurred, obstructed, or washed out with glare that the text cannot be deciphered.
+- If rejected, respond with:
 {
   "is_readable": false,
   "reason": "The ID card is blurry or text is illegible."
 }
 
-2. If the image is clear and readable, extract the exact values:
+Extraction Format:
+- If readable, extract the exact values:
 {
   "is_readable": true,
   "username": "Full name or name with initials as written on the card",
-  "index_no": "University Student Index Number or Registration Number (e.g. 210042A or 20/ENG/042)",
-  "address": "Department, faculty, residence hall, or home address if visible, otherwise 'Katubedda, Moratuwa'"
+  "index_no": "6 digits and uppercase letter (e.g. 250312H)",
+  "address": "Full address printed on the card, or 'Katubedda, Moratuwa'"
 }
 
 Respond ONLY with valid JSON.

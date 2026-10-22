@@ -19,18 +19,24 @@ export default function SignUpDetailsPage() {
 
   useEffect(() => {
     // Load extracted data from session
-    const storedUsername = sessionStorage.getItem('astrix_verified_username') || 'K. A. Nimal Perera';
-    const storedIndex = sessionStorage.getItem('astrix_verified_index') || '210042A';
-    const storedAddress = sessionStorage.getItem('astrix_verified_address') || 'Mora-Villa, Katubedda, Moratuwa';
+    const storedUsername = sessionStorage.getItem('astrix_verified_username');
+    const storedIndex = sessionStorage.getItem('astrix_verified_index');
+    const storedAddress = sessionStorage.getItem('astrix_verified_address');
+
+    if (!storedIndex || !storedUsername) {
+      // If no card has been scanned, redirect to upload step
+      router.replace('/signup');
+      return;
+    }
 
     setUsername(storedUsername);
     setIndexNo(storedIndex);
-    setAddress(storedAddress);
+    setAddress(storedAddress || 'Katubedda, Moratuwa');
 
     // Default email based on index number
     const cleanIdx = storedIndex.toLowerCase().replace(/[^a-z0-9]/g, '');
     setEmail(`${cleanIdx}@uom.lk`);
-  }, []);
+  }, [router]);
 
   const handleVerifySubmit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -17,19 +17,17 @@ export async function POST(req: NextRequest) {
 
     const apiKey = process.env.GEMINI_API_KEY;
 
-    // 2. Demo fallback if API key is not configured
+    // 2. Error if API key is not configured (no silent mock fallback)
     if (!apiKey || apiKey.trim() === '') {
-      console.log('ℹ️ [API/OCR] GEMINI_API_KEY not configured. Returning valid UoM demo card.');
-      return NextResponse.json({
-        success: true,
-        is_mock: true,
-        data: {
-          username: 'K. A. Nimal Perera',
-          index_no: '210042A',
-          address: 'Mora-Villa, Katubedda, Moratuwa',
+      console.warn('⚠️ [API/OCR] GEMINI_API_KEY is not configured in environment variables.');
+      return NextResponse.json(
+        {
+          success: false,
+          error_type: 'CONFIGURATION_ERROR',
+          message: 'Student ID OCR service is not configured. Please ensure GEMINI_API_KEY is set in environment settings.',
         },
-        message: 'Student ID successfully verified (Demo Mode).',
-      });
+        { status: 503 }
+      );
     }
 
     if (!file) {
@@ -53,29 +51,30 @@ export async function POST(req: NextRequest) {
       const ai = new GoogleGenAI({ apiKey });
 
       const prompt = `
-You are a strict Student Identity Verification OCR assistant for the University of Moratuwa (UoM) in Sri Lanka.
+You are a strict Student Identity Verification OCR assistant for Sri Lankan university student identity cards (specifically University of Moratuwa - UoM, or other Sri Lankan universities).
 Analyze this photo of a student Identity Card.
 
-First, check if the image is clear and legible:
+Your task:
+1. Check if the image is a clear and legible photo of a student ID card:
 - If the image is blurry, glaring, rotated, too low-resolution, not a student ID, or if the Index Number or Student Name cannot be confidently read, respond with:
 {
   "is_readable": false,
   "reason": "The ID card is blurry or text is illegible."
 }
 
-- If the image is clear and readable, extract the exact values:
+2. If the image is clear and readable, extract the exact values:
 {
   "is_readable": true,
   "username": "Full name or name with initials as written on the card",
-  "index_no": "University Student Index Number (e.g. 210042A or 20/ENG/042)",
-  "address": "Department, residence hall, or home address if visible, otherwise 'Katubedda, Moratuwa'"
+  "index_no": "University Student Index Number or Registration Number (e.g. 210042A or 20/ENG/042)",
+  "address": "Department, faculty, residence hall, or home address if visible, otherwise 'Katubedda, Moratuwa'"
 }
 
-Respond ONLY with valid JSON. Do not include markdown code blocks or additional text.
+Respond ONLY with valid JSON.
 `;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: [
           {
             parts: [
@@ -89,17 +88,21 @@ Respond ONLY with valid JSON. Do not include markdown code blocks or additional 
             ],
           },
         ],
+        config: {
+          responseMimeType: 'application/json',
+        },
       });
 
       const responseText = response.text || '';
-      const cleaned = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(cleaned);
+      console.log('🤖 [API/OCR] Gemini Raw Output:', responseText);
+
+      const parsed = JSON.parse(responseText.trim());
 
       if (!parsed.is_readable || !parsed.index_no) {
         return NextResponse.json({
           success: false,
           error_type: 'UNCLEAR_IMAGE',
-          message: "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text.",
+          message: parsed.reason || "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text.",
         });
       }
 
@@ -107,9 +110,9 @@ Respond ONLY with valid JSON. Do not include markdown code blocks or additional 
         success: true,
         is_mock: false,
         data: {
-          username: parsed.username || 'K. A. Nimal Perera',
+          username: parsed.username ? parsed.username.trim() : 'University Student',
           index_no: parsed.index_no.trim().toUpperCase(),
-          address: parsed.address || 'Katubedda, Moratuwa',
+          address: parsed.address ? parsed.address.trim() : 'Katubedda, Moratuwa',
         },
       });
     } catch (aiError: any) {

@@ -39,7 +39,7 @@
   - [x] `/api/auth/*` (Sign up, OTP verification, Login)
   - [x] `/api/borrow` and `/api/return` with MQTT publish & simulation fallback
   - [x] Background worker `worker/mqtt-listener.ts` listening to `astrix/uom/kiosk-01/#`
-  - [x] Resend email dispatch pipeline (OTP, rental confirmation, return receipt)
+  - [x] Gmail SMTP real email dispatch pipeline (`teamastrixhq@gmail.com`) for OTP, rental confirmation, and return receipt
   - [x] Update `/firmware/mock_esp32.js` for `astrix/uom/kiosk-01/*` topics
 
 ---

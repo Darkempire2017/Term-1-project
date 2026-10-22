@@ -17,10 +17,10 @@ Project ASTRIX is an IoT-enabled campus umbrella sharing kiosk system designed f
 | **Fullstack Framework** | **Next.js 15 (App Router)** | TypeScript, Tailwind CSS, Turbopack (`next dev --turbopack`) |
 | **Mobile UX Shell** | **Responsive Phone Viewport** | Centered mobile frame (`max-w-md mx-auto min-h-screen`) |
 | **Database & Auth** | **Supabase (PostgreSQL)** | URL: `https://ylmjqunzvhwzgyvlgauu.supabase.co` |
-| **AI Vision & OCR** | **Google Gemini 2.5 Flash** | `@google/genai` model `gemini-2.5-flash` for ID card extraction |
+| **AI Vision & OCR** | **Client-Side Tesseract.js (WASM)** | 100% private on-device OCR Web Worker (Zero cloud/server data leaks) |
 | **IoT Cloud Broker** | **HiveMQ Cloud** | MQTT over TLS (Port 8883) & WebSockets (Port 8884) |
 | **Hardware / Firmware** | **ESP32 & Simulator** | RC522 NFC Reader, 4x Solenoid Relays, CLI simulator |
-| **Transactional Email** | **Resend API** | 6-digit OTP verification, borrow & return receipts |
+| **Transactional Email** | **Gmail SMTP (`nodemailer`)** | 6-digit OTP verification, borrow & return receipts |
 
 ---
 

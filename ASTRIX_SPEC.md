@@ -18,9 +18,10 @@
   - [x] Create Floating Dev Nav / State Switcher for rapid multi-screen browser testing
 - [x] **Step 3: Screen 1 — Sign In (`/login`) & 2-Page Sign Up (`/signup` & `/signup/details`)**
   - [x] `/login`: Index No., Password, Forgot Password, Sign In, Sign Up link
-  - [x] `/signup` (Screen 1A): Dedicated ID upload page with Gemini clarity verification & rejection alert
+  - [x] `/signup` (Screen 1A): Dedicated ID upload page with 100% private client-side OCR (`lib/ocr-client.ts` via Tesseract.js WASM)
+  - [x] Multi-rotation auto-detection (0°, 270°, 90°, 180°) recovering camera-rotated student IDs
   - [x] `/signup/details` (Screen 1B): Extracted ID fields are UNCHANGEABLE / LOCKED, email is the ONLY editable field
-  - [x] `/api/ocr`: Gemini 3.8 Flash OCR verifying card legibility with JSON mode, real dynamic extraction, and rejection handling
+  - [x] Tamper-proof HMAC verification token (`lib/auth-token.ts`) ensuring zero unverified database pollution
   - [x] `VERIFY` submission generating OTP and forwarding to `/verify`
 - [x] **Step 4: Screen 2 — Verify / Reset Password (`/verify`)**
   - [x] 6-digit OTP verification code inputs

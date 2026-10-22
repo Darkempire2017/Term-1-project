@@ -47,3 +47,6 @@ logs/
 .vscode/.pio*
 *.hex
 *.bin
+
+# OCR & Tesseract models
+*.traineddata

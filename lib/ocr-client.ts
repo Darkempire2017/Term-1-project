@@ -2,7 +2,11 @@
  * ASTRIX Client-Side OCR Engine (100% Private, On-Device)
  * 
  * Runs Tesseract.js in a client Web Worker directly in the student's browser.
- * Zero student credentials or ID photos are ever transmitted over the network.
+ * Features:
+ * - Smart Index Auto-Correction (Fuzzy Matcher: S->5, O->0, l->1, etc.)
+ * - Adaptive Glare & Contrast Normalization (Histogram Percentile Stretching)
+ * - Strict Student Name Sanitizer (Rejects lowercase noise & colons)
+ * - Multi-Angle Auto-Detection (0°, 270°, 90°, 180°)
  */
 
 export interface OcrResult {
@@ -35,7 +39,58 @@ function loadImage(file: File | Blob): Promise<HTMLImageElement> {
 }
 
 /**
- * Render image to an offscreen canvas rotated and preprocessed
+ * Apply adaptive contrast and glare-reduction filter to canvas image data
+ */
+function applyAdaptiveGlareFilter(data: Uint8ClampedArray, width: number, height: number): void {
+  // 1. Calculate luminance histogram (256 bins)
+  const hist = new Int32Array(256);
+  const totalPixels = width * height;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+    hist[gray]++;
+  }
+
+  // 2. Identify 5th and 95th percentiles to eliminate flash glare outliers & edge shadows
+  let count = 0;
+  let minLum = 0;
+  let maxLum = 255;
+  const lowerThreshold = totalPixels * 0.05;
+  const upperThreshold = totalPixels * 0.95;
+
+  for (let i = 0; i < 256; i++) {
+    count += hist[i];
+    if (count >= lowerThreshold && minLum === 0) minLum = i;
+    if (count >= upperThreshold) {
+      maxLum = i;
+      break;
+    }
+  }
+
+  const range = Math.max(35, maxLum - minLum);
+
+  // 3. Stretch dynamic range & apply gentle S-curve to punch dark ink out of glare
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    let stretched = ((gray - minLum) / range) * 255;
+    stretched = Math.max(0, Math.min(255, stretched));
+
+    let val: number;
+    if (stretched < 128) {
+      val = Math.pow(stretched / 128, 1.35) * 128;
+    } else {
+      val = 255 - Math.pow((255 - stretched) / 127, 1.35) * 127;
+    }
+
+    const clamped = Math.round(Math.max(0, Math.min(255, val)));
+    data[i] = clamped;
+    data[i + 1] = clamped;
+    data[i + 2] = clamped;
+  }
+}
+
+/**
+ * Render image to an offscreen canvas rotated and preprocessed with adaptive glare filter
  */
 function getProcessedCanvas(img: HTMLImageElement, angle: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
@@ -66,24 +121,118 @@ function getProcessedCanvas(img: HTMLImageElement, angle: number): HTMLCanvasEle
   ctx.drawImage(img, -w / 2, -h / 2, w, h);
   ctx.restore();
 
-  // Grayscale and moderate contrast adjustment to make text crisp
+  // Apply adaptive glare & contrast enhancement
   try {
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imgData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      const contrasted = (gray - 128) * 1.15 + 128;
-      const clamped = Math.max(0, Math.min(255, contrasted));
-      data[i] = clamped;
-      data[i + 1] = clamped;
-      data[i + 2] = clamped;
-    }
+    applyAdaptiveGlareFilter(imgData.data, canvas.width, canvas.height);
     ctx.putImageData(imgData, 0, 0);
   } catch (e) {
-    console.warn('Canvas image data filtering skipped:', e);
+    console.warn('Canvas glare filter notice:', e);
   }
 
   return canvas;
+}
+
+/**
+ * Smart index normalizer with character-confusion correction:
+ * Replaces letter O->0, S->5, l->1 in digits; digit 0->O, 1->I, 5->S in check letter
+ */
+export function normalizeCandidateIndex(raw: string): string | null {
+  const cleaned = raw.replace(/[\s\-\.]+/g, '').toUpperCase();
+  if (cleaned.length !== 7) return null;
+
+  const digitMap: Record<string, string> = {
+    'O': '0', 'Q': '0', 'D': '0',
+    'I': '1', 'L': '1',
+    'Z': '2',
+    'E': '3',
+    'A': '4',
+    'S': '5',
+    'G': '6',
+    'T': '7',
+    'B': '8',
+    'q': '9',
+  };
+  const letterMap: Record<string, string> = {
+    '0': 'O',
+    '1': 'I',
+    '2': 'Z',
+    '5': 'S',
+    '8': 'B',
+  };
+
+  let digits = '';
+  for (let i = 0; i < 6; i++) {
+    const ch = cleaned[i];
+    if (/[0-9]/.test(ch)) {
+      digits += ch;
+    } else if (digitMap[ch]) {
+      digits += digitMap[ch];
+    } else {
+      return null;
+    }
+  }
+
+  let lastChar = cleaned[6];
+  if (/[A-Z]/.test(lastChar)) {
+    // Valid letter
+  } else if (letterMap[lastChar]) {
+    lastChar = letterMap[lastChar];
+  } else {
+    return null;
+  }
+
+  // Must match standard UoM format: 6 digits + 1 uppercase letter
+  const finalIndex = digits + lastChar;
+  if (/^[0-9]{6}[A-Z]$/.test(finalIndex)) {
+    return finalIndex;
+  }
+  return null;
+}
+
+/**
+ * Extract Moratuwa Index Number from raw text with smart auto-correction
+ */
+export function extractIndexNumber(text: string): string | null {
+  // 1. Exact match attempt first
+  const exactMatch = text.match(/\b([0-9]{6}[A-Z])\b/i);
+  if (exactMatch) {
+    return exactMatch[1].toUpperCase();
+  }
+
+  // 2. Fuzzy search: find 7-11 character alphanumeric candidates (allowing spaces or hyphens)
+  // e.g. '2S0312H', '250 312 H', '250-312H', '2SO4O5V'
+  const candidateMatches = text.match(/(?:^|\s|[^\w])([0-9a-zA-Z\s\-\.]{7,11})(?:$|\s|[^\w])/g);
+  if (candidateMatches) {
+    for (const match of candidateMatches) {
+      const candidate = match.replace(/^[^\w]+|[^\w]+$/g, '');
+      const normalized = normalizeCandidateIndex(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+
+  // 3. Line-by-line fallback
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const words = line.trim().split(/\s+/);
+    for (let i = 0; i < words.length; i++) {
+      // Single word
+      const w = words[i].replace(/^[^\w]+|[^\w]+$/g, '');
+      const normW = normalizeCandidateIndex(w);
+      if (normW) return normW;
+
+      // Two words joined (e.g. '250312' and 'H')
+      if (i < words.length - 1) {
+        const joined = (words[i] + words[i + 1]).replace(/^[^\w]+|[^\w]+$/g, '');
+        const normJ = normalizeCandidateIndex(joined);
+        if (normJ) return normJ;
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -91,7 +240,6 @@ function getProcessedCanvas(img: HTMLImageElement, angle: number): HTMLCanvasEle
  * colons, and stray non-alphabetic characters.
  */
 export function cleanStudentName(raw: string): string {
-  // Strip non-letter prefix/suffix
   const cleaned = raw.replace(/^[^a-zA-Z]+/, '').replace(/[^a-zA-Z\.]+$/, '');
   const tokens = cleaned.split(/\s+/);
   const cleanTokens: string[] = [];
@@ -121,9 +269,8 @@ export function parseMoratuwaIdText(text: string): {
   index_no: string | null;
   username: string | null;
 } {
-  // 1. Index number pattern: 6 digits + 1 uppercase letter (e.g. 250312H, 250405V, 210042A)
-  const indexMatch = text.match(/\b([0-9]{6}[A-Z])\b/i);
-  const index_no = indexMatch ? indexMatch[1].toUpperCase() : null;
+  // 1. Extract Index Number with smart auto-correction
+  const index_no = extractIndexNumber(text);
 
   if (!index_no) {
     return { index_no: null, username: null };
@@ -244,7 +391,7 @@ export async function scanStudentIdLocally(
       return {
         success: false,
         error:
-          'Could not clearly read your Student Index Number. Please ensure the card is well-lit, fully in frame, and not blurry.',
+          'Could not clearly read your Student Index Number. Please ensure the card is well-lit, fully in frame, and free of direct glare.',
       };
     }
 

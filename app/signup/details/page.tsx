@@ -27,9 +27,8 @@ export default function SignUpDetailsPage() {
 
     setIndexNo(storedIndex);
 
-    // Pre-fill suggested email based on index number
-    const cleanIdx = storedIndex.toLowerCase().replace(/[^a-z0-9]/g, '');
-    setEmail(`${cleanIdx}@uom.lk`);
+    // Keep email empty by default for user to enter their preferred email
+    setEmail('');
   }, [router]);
 
   const handleVerifySubmit = async (e: React.FormEvent) => {
@@ -44,7 +43,7 @@ export default function SignUpDetailsPage() {
 
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
-      setError('Please enter a valid university or personal email address.');
+      setError('Please enter a valid email address.');
       return;
     }
 
@@ -187,23 +186,23 @@ export default function SignUpDetailsPage() {
         {/* 3. Email (EDITABLE by Student) */}
         <div className="space-y-1 pt-1">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-sky-700 uppercase tracking-wider flex items-center space-x-1">
-              <span>University Email</span>
-              <span className="text-[10px] bg-sky-100 text-sky-700 px-1.5 py-0.2 rounded font-normal normal-case">
+            <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center space-x-1">
+              <span>Email Address</span>
+              <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-normal normal-case">
                 OTP will be sent here
               </span>
             </label>
           </div>
           <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-sky-600">
+            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
               <Mail className="w-4 h-4" />
             </div>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="e.g. 250373t@uom.lk"
-              className="w-full pl-10 pr-4 py-3 rounded-xl bg-white border-2 border-sky-400 text-sm font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-4 focus:ring-sky-500/15 focus:border-sky-600 transition shadow-xs"
+              placeholder="e.g. name@gmail.com"
+              className="w-full pl-10 pr-4 py-3 rounded-xl bg-white border-2 border-slate-200 text-sm font-semibold text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-4 focus:ring-sky-500/15 focus:border-sky-600 transition shadow-xs"
               required
             />
           </div>

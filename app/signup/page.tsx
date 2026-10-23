@@ -137,9 +137,16 @@ export default function BarcodeScanPage() {
 
       scannerRef.current = html5QrCode;
 
+      // Proportional scanning box that adapts to any screen or camera aspect ratio (iOS / Android)
+      const qrboxFunction = (viewfinderWidth: number, viewfinderHeight: number) => {
+        const boxWidth = Math.max(200, Math.floor(viewfinderWidth * 0.82));
+        const boxHeight = Math.max(110, Math.floor(boxWidth * 0.52));
+        return { width: boxWidth, height: boxHeight };
+      };
+
       const config = {
         fps: 15,
-        qrbox: { width: 280, height: 160 },
+        qrbox: qrboxFunction,
         aspectRatio: 1.0,
       };
 
@@ -364,16 +371,48 @@ export default function BarcodeScanPage() {
         )}
 
         {/* Live Camera Viewfinder Card */}
-        <div className="relative w-full rounded-3xl overflow-hidden bg-slate-950 border-2 border-slate-800 shadow-xl aspect-square flex flex-col items-center justify-center">
+        <div className="relative w-full rounded-3xl overflow-hidden bg-slate-950 border-2 border-slate-800 shadow-xl aspect-square flex flex-col items-center justify-center min-h-[290px]">
+          {/* iOS Safari WebKit & Android Video Styles Override */}
+          <style jsx global>{`
+            #astrix-barcode-reader {
+              width: 100% !important;
+              height: 100% !important;
+              border: none !important;
+              padding: 0 !important;
+              position: absolute !important;
+              inset: 0 !important;
+              display: flex !important;
+              align-items: center !important;
+              justify-content: center !important;
+              overflow: hidden !important;
+            }
+            #astrix-barcode-reader video {
+              width: 100% !important;
+              height: 100% !important;
+              object-fit: cover !important;
+              border-radius: 1.5rem !important;
+            }
+            #astrix-barcode-reader__scan_region {
+              width: 100% !important;
+              height: 100% !important;
+            }
+            #astrix-barcode-reader__dashboard_section {
+              display: none !important;
+            }
+            #astrix-barcode-reader img {
+              display: none !important;
+            }
+          `}</style>
+
           {/* html5-qrcode video mount element */}
           <div id="astrix-barcode-reader" className="w-full h-full object-cover" />
           <div id="astrix-file-scanner" className="hidden" />
 
           {/* Targeting Laser & Corner Overlays */}
           {isScanning && !existingUserError && (
-            <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6">
-              {/* Card Bounding Frame */}
-              <div className="w-full max-w-[280px] h-36 rounded-2xl border-2 border-sky-400/80 relative shadow-[0_0_20px_rgba(56,189,248,0.3)]">
+            <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
+              {/* Card Bounding Frame (Responsive width & aspect ratio) */}
+              <div className="w-[84%] max-w-[320px] aspect-[16/10] rounded-2xl border-2 border-sky-400/80 relative shadow-[0_0_20px_rgba(56,189,248,0.3)]">
                 {/* Corner Marks */}
                 <div className="absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 border-sky-400" />
                 <div className="absolute -top-1 -right-1 w-4 h-4 border-t-4 border-r-4 border-sky-400" />

@@ -1,121 +1,248 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Camera, Upload, CheckCircle2, AlertTriangle, ShieldCheck, X } from 'lucide-react';
+import {
+  Barcode,
+  Camera,
+  AlertTriangle,
+  ShieldCheck,
+  CheckCircle2,
+  RefreshCw,
+  Flashlight,
+  Upload,
+  ArrowRight,
+  UserCheck,
+} from 'lucide-react';
 import { useViewMode } from '@/components/ViewModeContext';
-import { scanStudentIdLocally } from '@/lib/ocr-client';
 
-export default function UploadIdPage() {
+export default function BarcodeScanPage() {
   const router = useRouter();
-  const cameraInputRef = useRef<HTMLInputElement>(null);
-  const galleryInputRef = useRef<HTMLInputElement>(null);
   const { isStudentMode } = useViewMode();
+  const scannerRef = useRef<any>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [idPhotoPreview, setIdPhotoPreview] = useState<string | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [showSourceModal, setShowSourceModal] = useState(false);
-  const [progressPct, setProgressPct] = useState(0);
-  const [progressText, setProgressText] = useState('Initializing local scanner...');
-  const [errorInfo, setErrorInfo] = useState<{ title: string; message: string } | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [existingUserError, setExistingUserError] = useState<{
+    index_no: string;
+    message: string;
+  } | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
+  const [hasTorch, setHasTorch] = useState(false);
+  const [isTorchOn, setIsTorchOn] = useState(false);
 
-  const processImageFile = async (file: File, simulateBlurry = false) => {
-    setIsProcessing(true);
-    setErrorInfo(null);
-    setProgressPct(5);
-    setProgressText('Loading photo...');
+  // Parse and validate UoM Student Index Number from Barcode text
+  const extractUomIndex = (rawText: string): string | null => {
+    if (!rawText) return null;
+    // Strip common barcode padding (like '*' in Code 39 or prefix)
+    const cleaned = rawText.replace(/[\*\s\-\/]+/g, '').toUpperCase();
+    const match = cleaned.match(/\b([0-9]{6}[A-Z])\b/);
+    return match ? match[1].toUpperCase() : null;
+  };
 
-    // Preview
-    const reader = new FileReader();
-    reader.onload = () => {
-      setIdPhotoPreview(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+  // Process decoded barcode text
+  const handleBarcodeDecoded = async (decodedText: string) => {
+    setValidationError(null);
+    setExistingUserError(null);
 
-    if (simulateBlurry) {
-      setTimeout(() => {
-        setIsProcessing(false);
-        setErrorInfo({
-          title: 'Unclear Photo Detected',
-          message: "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text.",
-        });
-      }, 700);
+    const index_no = extractUomIndex(decodedText);
+
+    if (!index_no) {
+      // Barcode does not contain a valid Moratuwa Index Number
+      setValidationError(
+        'Invalid barcode. Please point your camera directly at the barcode on your University Student ID.'
+      );
       return;
     }
 
+    // Stop scanner while validating
     try {
-      const result = await scanStudentIdLocally(file, (pct, status) => {
-        setProgressPct(pct);
-        setProgressText(status);
+      if (scannerRef.current && isScanning) {
+        await scannerRef.current.stop();
+        setIsScanning(false);
+      }
+    } catch (e) {
+      console.warn('Scanner stop warning:', e);
+    }
+
+    // Haptic feedback
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(150);
+    }
+
+    setIsChecking(true);
+
+    try {
+      // Check if user already exists in database
+      const res = await fetch('/api/auth/check-index', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index_no }),
       });
 
-      if (!result.success || !result.index_no) {
-        setErrorInfo({
-          title: 'Unclear Photo Detected',
+      const json = await res.json();
+
+      if (json.exists) {
+        setExistingUserError({
+          index_no,
           message:
-            result.error ||
-            "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text.",
+            json.message ||
+            `An account already exists for Index Number ${index_no}. Please sign in to your account.`,
         });
+        setIsChecking(false);
         return;
       }
 
-      // Success: Save verified data to browser storage for the locked details screen
-      const username = result.username || 'University Student';
-      const index_no = result.index_no;
-
-      sessionStorage.setItem('astrix_verified_username', username);
+      // Valid and non-existent student: Save index into session and forward to Screen 1B
       sessionStorage.setItem('astrix_verified_index', index_no);
-      if (idPhotoPreview) {
-        sessionStorage.setItem('astrix_verified_photo', idPhotoPreview);
-      }
-
-      // Smoothly navigate to Screen 1B: Details page
       router.push('/signup/details');
     } catch (err: any) {
-      setErrorInfo({
-        title: 'Processing Notice',
-        message: err.message || 'Unable to scan ID photo locally. Please try a different photo.',
-      });
+      console.error('Verification check error:', err);
+      // Fallback
+      sessionStorage.setItem('astrix_verified_index', index_no);
+      router.push('/signup/details');
     } finally {
-      setIsProcessing(false);
+      setIsChecking(false);
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      processImageFile(file);
+  // Start the live camera scanner
+  const startScanner = async () => {
+    setCameraError(null);
+    setValidationError(null);
+    setExistingUserError(null);
+
+    try {
+      const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
+
+      if (scannerRef.current) {
+        try {
+          await scannerRef.current.stop();
+        } catch {}
+      }
+
+      const html5QrCode = new Html5Qrcode('astrix-barcode-reader', {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.CODE_93,
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.EAN_13,
+        ],
+        verbose: false,
+      });
+
+      scannerRef.current = html5QrCode;
+
+      const config = {
+        fps: 15,
+        qrbox: { width: 280, height: 160 },
+        aspectRatio: 1.0,
+      };
+
+      await html5QrCode.start(
+        { facingMode: 'environment' },
+        config,
+        (decodedText) => {
+          handleBarcodeDecoded(decodedText);
+        },
+        undefined
+      );
+
+      setIsScanning(true);
+
+      // Check if torch/flashlight is supported
+      try {
+        const capabilities = html5QrCode.getRunningTrackCapabilities();
+        if (capabilities && 'torch' in capabilities) {
+          setHasTorch(true);
+        }
+      } catch {}
+    } catch (err: any) {
+      console.warn('Camera start error:', err);
+      setCameraError(
+        'Unable to access camera. Please allow camera permissions or upload an image of your ID barcode.'
+      );
+      setIsScanning(false);
     }
-    // Reset inputs so the same file can be re-selected if needed
-    e.target.value = '';
   };
+
+  // Toggle torch / flashlight
+  const toggleTorch = async () => {
+    if (!scannerRef.current || !hasTorch) return;
+    try {
+      const next = !isTorchOn;
+      await scannerRef.current.applyVideoConstraints({
+        advanced: [{ torch: next }],
+      });
+      setIsTorchOn(next);
+    } catch (e) {
+      console.warn('Torch error:', e);
+    }
+  };
+
+  // Scan from uploaded barcode image file
+  const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsChecking(true);
+      setValidationError(null);
+      setExistingUserError(null);
+
+      const { Html5Qrcode } = await import('html5-qrcode');
+      const html5QrCode = new Html5Qrcode('astrix-file-scanner');
+      const decodedText = await html5QrCode.scanFile(file, true);
+      html5QrCode.clear();
+
+      await handleBarcodeDecoded(decodedText);
+    } catch (err) {
+      setValidationError(
+        'Could not read a valid barcode from the selected image. Please point your camera directly at the barcode.'
+      );
+    } finally {
+      setIsChecking(false);
+      e.target.value = '';
+    }
+  };
+
+  // Mount scanner on page load
+  useEffect(() => {
+    startScanner();
+
+    return () => {
+      if (scannerRef.current) {
+        try {
+          scannerRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
 
   // Developer Testing Shortcuts
-  const handleTestClearCard = () => {
-    setIsProcessing(true);
-    setErrorInfo(null);
-    setTimeout(() => {
-      sessionStorage.setItem('astrix_verified_username', 'K. A. Nimal Perera');
-      sessionStorage.setItem('astrix_verified_index', '210042A');
-      router.push('/signup/details');
-    }, 600);
+  const handleDemoBarcode = (index: string) => {
+    handleBarcodeDecoded(index);
   };
 
-  const handleTestBlurryCard = () => {
-    setIsProcessing(true);
-    setErrorInfo(null);
-    setTimeout(() => {
-      setIsProcessing(false);
-      setErrorInfo({
-        title: 'Unclear Photo Detected',
-        message: "We couldn't clearly read your Student ID. Please upload a clearer photo with good lighting and visible text.",
-      });
-    }, 600);
+  const handleSimulateInvalid = () => {
+    setValidationError(
+      'Invalid barcode (8901030456128). Please point your camera at the barcode printed on your University Student ID.'
+    );
+  };
+
+  const handleSimulateExisting = () => {
+    setExistingUserError({
+      index_no: 'DEV001',
+      message: 'Account already exists for Index Number DEV001. Please sign in to your existing account.',
+    });
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between p-6 bg-white select-none overflow-y-auto relative">
+    <div className="flex-1 flex flex-col justify-between p-6 bg-white select-none overflow-y-auto">
       {/* Top Header */}
       <div className="pt-2 space-y-3">
         <div className="flex items-center justify-between">
@@ -127,158 +254,191 @@ export default function UploadIdPage() {
             <div className="flex items-center space-x-1">
               <button
                 type="button"
-                onClick={handleTestClearCard}
+                onClick={() => handleDemoBarcode('250373T')}
                 className="text-[10px] text-emerald-700 font-bold bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded-lg border border-emerald-200 transition"
-                title="Test successful scan"
+                title="Simulate valid UoM ID barcode"
               >
-                Demo Clear ID
+                Scan 250373T
               </button>
               <button
                 type="button"
-                onClick={handleTestBlurryCard}
-                className="text-[10px] text-rose-700 font-bold bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-lg border border-rose-200 transition"
-                title="Test rejection scan"
+                onClick={handleSimulateInvalid}
+                className="text-[10px] text-amber-700 font-bold bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg border border-amber-200 transition"
+                title="Test wrong barcode"
               >
-                Simulate Blurry
+                Wrong Barcode
+              </button>
+              <button
+                type="button"
+                onClick={handleSimulateExisting}
+                className="text-[10px] text-rose-700 font-bold bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-lg border border-rose-200 transition"
+                title="Test duplicate account"
+              >
+                User Exists
               </button>
             </div>
           )}
         </div>
 
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Upload Student ID</h1>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center space-x-2">
+            <span>Scan Student ID</span>
+            <Barcode className="w-6 h-6 text-sky-600" />
+          </h1>
           <p className="text-xs text-slate-500">
-            Please upload a photo of your University Student ID card.
+            Point your camera at the barcode on your University Student ID card.
           </p>
         </div>
       </div>
 
-      {/* Main Upload Body */}
+      {/* Main Barcode Scanner Body */}
       <div className="my-auto py-4 space-y-4">
-        {/* Error Banner */}
-        {errorInfo && (
-          <div className="p-4 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-800 text-xs space-y-2 animate-in fade-in slide-in-from-top-1 shadow-sm">
+        {/* Error: Non-UoM Barcode Error */}
+        {validationError && (
+          <div className="p-4 rounded-2xl bg-amber-50 border-2 border-amber-300 text-amber-900 text-xs space-y-2 animate-in fade-in slide-in-from-top-1 shadow-sm">
             <div className="flex items-start space-x-2">
-              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <p className="font-bold text-rose-900 text-xs">{errorInfo.title}</p>
-                <p className="leading-relaxed text-rose-800">{errorInfo.message}</p>
+                <p className="font-bold text-amber-950 text-xs">Different Barcode Detected</p>
+                <p className="leading-relaxed text-amber-800">{validationError}</p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowSourceModal(true)}
-              className="w-full mt-2 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition"
-            >
-              <Camera className="w-3.5 h-3.5" />
-              <span>Retry ID Upload</span>
-            </button>
           </div>
         )}
 
-        {/* Hidden File Inputs: Camera (with capture) & Gallery */}
-        <input
-          type="file"
-          ref={cameraInputRef}
-          onChange={handleFileChange}
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-        />
-        <input
-          type="file"
-          ref={galleryInputRef}
-          onChange={handleFileChange}
-          accept="image/*"
-          className="hidden"
-        />
-
-        {/* Upload Card */}
-        <div
-          onClick={() => !isProcessing && setShowSourceModal(true)}
-          className={`w-full border-2 border-dashed rounded-3xl p-6 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-3 group ${
-            errorInfo
-              ? 'border-rose-300 bg-rose-50/30 hover:border-rose-400'
-              : 'border-sky-300 bg-sky-50/40 hover:bg-sky-50 hover:border-sky-500'
-          }`}
-        >
-          {isProcessing ? (
-            <div className="py-6 flex flex-col items-center justify-center space-y-3 w-full px-2">
-              <div className="w-12 h-12 border-4 border-sky-200 border-t-sky-600 rounded-full animate-spin" />
-              <div className="w-full max-w-xs space-y-1.5 text-center">
-                <div className="flex justify-between text-xs font-semibold text-slate-700">
-                  <span className="truncate pr-2">{progressText}</span>
-                  <span className="text-sky-600 shrink-0 font-bold">{progressPct}%</span>
-                </div>
-                <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-sky-600 h-2 rounded-full transition-all duration-300 ease-out"
-                    style={{ width: `${Math.min(100, Math.max(5, progressPct))}%` }}
-                  />
-                </div>
-              </div>
-              <div className="flex items-center space-x-1.5 text-[11px] text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 mt-2">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                <span className="font-medium">100% On-Device & Private (Zero Data Sent Online)</span>
+        {/* Error: User Already Exists in Database */}
+        {existingUserError && (
+          <div className="p-4 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-900 text-xs space-y-3 animate-in fade-in slide-in-from-top-1 shadow-sm">
+            <div className="flex items-start space-x-2">
+              <UserCheck className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold text-rose-950 text-xs">Account Already Exists</p>
+                <p className="leading-relaxed text-rose-800">{existingUserError.message}</p>
               </div>
             </div>
-          ) : idPhotoPreview ? (
-            <div className="space-y-3 w-full">
-              <div className="relative w-full h-36 rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
-                <img src={idPhotoPreview} alt="ID Preview" className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-black/40 flex items-center justify-center text-white text-xs font-semibold opacity-0 group-hover:opacity-100 transition">
-                  Click to re-take or change photo
-                </div>
-              </div>
+            <div className="flex items-center space-x-2 pt-1">
+              <Link
+                href={`/login?index_no=${encodeURIComponent(existingUserError.index_no)}`}
+                className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition text-center shadow-sm"
+              >
+                <span>Sign In to Account</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowSourceModal(true);
-                }}
-                className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs uppercase tracking-wider inline-flex items-center space-x-1.5 shadow-md shadow-sky-600/30"
+                onClick={startScanner}
+                className="py-2 px-3 bg-white border border-rose-200 hover:bg-rose-100 text-rose-800 rounded-xl font-bold text-xs transition"
               >
-                <Camera className="w-4 h-4" />
-                <span>Upload Clearer Photo</span>
+                Scan Again
               </button>
             </div>
-          ) : (
-            <div className="space-y-3 py-4">
-              <div className="w-16 h-16 rounded-3xl bg-sky-600 text-white flex items-center justify-center shadow-lg shadow-sky-600/30 group-hover:scale-105 transition mx-auto">
-                <Camera className="w-8 h-8" />
-              </div>
-              <div>
-                <span className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs uppercase tracking-wider inline-flex items-center space-x-2 shadow-md shadow-sky-600/30 transition">
-                  <Upload className="w-4 h-4" />
-                  <span>UPLOAD ID PHOTO</span>
-                </span>
-                <p className="text-[11px] text-slate-500 mt-2">
-                  Take a photo or choose from photo gallery
-                </p>
-              </div>
+          </div>
+        )}
+
+        {/* Camera Permission Error */}
+        {cameraError && (
+          <div className="p-4 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-900 text-xs space-y-3 animate-in fade-in shadow-sm">
+            <div className="flex items-start space-x-2">
+              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <p className="leading-relaxed text-rose-800">{cameraError}</p>
             </div>
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={startScanner}
+                className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Retry Camera</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex-1 py-2 px-3 bg-white border border-rose-200 hover:bg-rose-100 text-rose-800 rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Upload Barcode</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Live Camera Viewfinder Card */}
+        <div className="relative w-full rounded-3xl overflow-hidden bg-slate-950 border-2 border-slate-800 shadow-xl aspect-square flex flex-col items-center justify-center">
+          {/* html5-qrcode video mount element */}
+          <div id="astrix-barcode-reader" className="w-full h-full object-cover" />
+          <div id="astrix-file-scanner" className="hidden" />
+
+          {/* Targeting Laser & Corner Overlays */}
+          {isScanning && !existingUserError && (
+            <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6">
+              {/* Card Bounding Frame */}
+              <div className="w-full max-w-[280px] h-36 rounded-2xl border-2 border-sky-400/80 relative shadow-[0_0_20px_rgba(56,189,248,0.3)]">
+                {/* Corner Marks */}
+                <div className="absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 border-sky-400" />
+                <div className="absolute -top-1 -right-1 w-4 h-4 border-t-4 border-r-4 border-sky-400" />
+                <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-4 border-l-4 border-sky-400" />
+                <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-4 border-r-4 border-sky-400" />
+
+                {/* Animated Red Laser Scan Line */}
+                <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_8px_#ef4444] animate-pulse top-1/2 -translate-y-1/2" />
+              </div>
+
+              <p className="text-[11px] font-semibold text-white/90 bg-black/60 backdrop-blur-xs px-3 py-1 rounded-full mt-3 border border-white/10">
+                Fit Student ID barcode in box
+              </p>
+            </div>
+          )}
+
+          {/* Checking Overlay */}
+          {isChecking && (
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center space-y-3 z-20">
+              <div className="w-10 h-10 border-4 border-sky-200 border-t-sky-600 rounded-full animate-spin" />
+              <p className="text-white font-bold text-xs tracking-wide">
+                Verifying Student ID...
+              </p>
+            </div>
+          )}
+
+          {/* Torch Button */}
+          {hasTorch && isScanning && (
+            <button
+              type="button"
+              onClick={toggleTorch}
+              className={`absolute top-3 right-3 p-2.5 rounded-full backdrop-blur-md transition shadow-md z-10 ${
+                isTorchOn ? 'bg-amber-400 text-slate-950' : 'bg-black/40 text-white hover:bg-black/60'
+              }`}
+              title="Toggle Flashlight"
+            >
+              <Flashlight className="w-4 h-4" />
+            </button>
           )}
         </div>
 
-        {/* Simple Guidelines */}
-        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2.5 text-xs text-slate-600">
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-              Tips for Quick Approval:
-            </p>
-            <div className="flex items-center space-x-1 text-[10px] text-emerald-700 font-semibold">
-              <ShieldCheck className="w-3 h-3 text-emerald-600" />
-              <span>Private OCR</span>
-            </div>
+        {/* Hidden File Input for fallback photo scan */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileScan}
+          accept="image/*"
+          className="hidden"
+        />
+
+        {/* Instructions & Fallback */}
+        <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+          <div className="flex items-center space-x-1.5">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-medium text-[11px]">Instant 100% Barcode Checksum</span>
           </div>
-          <div className="flex items-center space-x-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Use good lighting without flash glare</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Make sure your Index Number and Name are visible</span>
-          </div>
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="text-[11px] font-bold text-sky-600 hover:text-sky-700 underline inline-flex items-center space-x-1"
+          >
+            <Upload className="w-3 h-3" />
+            <span>Upload Photo Instead</span>
+          </button>
         </div>
       </div>
 
@@ -291,79 +451,6 @@ export default function UploadIdPage() {
           </Link>
         </p>
       </div>
-
-      {/* Source Selection Action Sheet Modal */}
-      {showSourceModal && (
-        <div
-          onClick={() => setShowSourceModal(false)}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-200"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl border border-slate-200 space-y-4 animate-in slide-in-from-bottom-6 duration-300"
-          >
-            <div className="text-center space-y-1 relative">
-              <div className="w-10 h-1 bg-slate-300 rounded-full mx-auto mb-3 sm:hidden" />
-              <h3 className="text-base font-bold text-slate-900">Upload Student ID Photo</h3>
-              <p className="text-xs text-slate-500">Choose how you want to provide your ID card</p>
-              <button
-                type="button"
-                onClick={() => setShowSourceModal(false)}
-                className="absolute -top-1 right-0 p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition hidden sm:inline-flex"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-2.5 pt-2">
-              {/* Option 1: Live Camera */}
-              <button
-                type="button"
-                onClick={() => {
-                  setShowSourceModal(false);
-                  cameraInputRef.current?.click();
-                }}
-                className="w-full p-4 rounded-2xl bg-sky-50 hover:bg-sky-100 border-2 border-sky-200 text-sky-950 flex items-center space-x-3.5 transition group active:scale-[0.99] text-left"
-              >
-                <div className="w-11 h-11 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-md shadow-sky-600/20 group-hover:scale-105 transition shrink-0">
-                  <Camera className="w-5 h-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="font-bold text-sm text-sky-950">Take Photo with Camera</p>
-                  <p className="text-xs text-sky-700">Open camera directly to snap your ID</p>
-                </div>
-              </button>
-
-              {/* Option 2: Gallery / Files */}
-              <button
-                type="button"
-                onClick={() => {
-                  setShowSourceModal(false);
-                  galleryInputRef.current?.click();
-                }}
-                className="w-full p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border-2 border-slate-200 text-slate-900 flex items-center space-x-3.5 transition group active:scale-[0.99] text-left"
-              >
-                <div className="w-11 h-11 rounded-xl bg-slate-800 text-white flex items-center justify-center shadow-md shadow-slate-800/20 group-hover:scale-105 transition shrink-0">
-                  <Upload className="w-5 h-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="font-bold text-sm text-slate-900">Choose from Gallery / Files</p>
-                  <p className="text-xs text-slate-500">Select an existing photo from your device</p>
-                </div>
-              </button>
-            </div>
-
-            {/* Cancel Button */}
-            <button
-              type="button"
-              onClick={() => setShowSourceModal(false)}
-              className="w-full py-3 rounded-2xl text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

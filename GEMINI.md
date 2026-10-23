@@ -18,7 +18,7 @@
   * Tables: `users` (PK: `index_no`), `umbrellas` (PK: `slot` 1-4), `borrow_records` (PK: `record_id` UUID)
 * **Hardware & IoT:** ESP32 Microcontroller + HiveMQ MQTT Broker
   * Topics: `astrix/uom/kiosk-01/command/unlock`, `astrix/uom/kiosk-01/event/removed`, `astrix/uom/kiosk-01/event/returned`, `astrix/uom/kiosk-01/status`
-* **AI & Vision:** Client-Side Tesseract.js (WASM) for 100% private on-device Student ID OCR
+* **ID Scanner:** Live On-Device Barcode & QR Scanner (`html5-qrcode`) for 100% private & accurate Student ID extraction
 * **Transactional Email:** Gmail SMTP (`nodemailer`) with Resend fallback for OTP verification, rental receipts, and return confirmations
 
 ---

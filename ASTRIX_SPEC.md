@@ -18,9 +18,10 @@
   - [x] Create Floating Dev Nav / State Switcher for rapid multi-screen browser testing
 - [x] **Step 3: Screen 1 — Sign In (`/login`) & 2-Page Sign Up (`/signup` & `/signup/details`)**
   - [x] `/login`: Index No., Password with salted cryptographic verification (`lib/password.ts`)
-  - [x] `/signup` (Screen 1A): Dedicated ID upload page with 100% private client-side OCR (`lib/ocr-client.ts` via Tesseract.js WASM)
-  - [x] Multi-rotation auto-detection (0°, 270°, 90°, 180°) recovering camera-rotated student IDs
-  - [x] `/signup/details` (Screen 1B): Extracted ID fields (Name & Index) locked, email editable, address field completely removed
+  - [x] `/signup` (Screen 1A): Live Barcode Scanner Viewfinder (`html5-qrcode`) with targeting laser & checksum decoding
+  - [x] Rejection of non-UoM barcodes ("Invalid barcode. Please point camera at University Student ID")
+  - [x] Real-time duplicate account detection ("Account already exists for Index Number [X]")
+  - [x] `/signup/details` (Screen 1B): Barcode Index Number strictly locked/unchangeable; Student Name & Email editable
   - [x] Tamper-proof HMAC verification token (`lib/auth-token.ts`) ensuring zero unverified database pollution
   - [x] `VERIFY` submission generating OTP and forwarding to `/verify`
   - [x] Password hashing with random 16-byte salt and `scrypt` for all user accounts

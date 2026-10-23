@@ -8,7 +8,7 @@ export async function POST(request: Request) {
 
     const cleanIndex = index_no?.trim().toUpperCase();
 
-    if (!cleanIndex || !/^[0-9]{6}[A-Z]$/.test(cleanIndex)) {
+    if (!cleanIndex || !/^(DEV[0-9]{3}|[0-9]{6}[A-Z])$/i.test(cleanIndex)) {
       return NextResponse.json(
         {
           success: false,

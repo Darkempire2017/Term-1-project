@@ -19,9 +19,10 @@
 - [x] **Step 3: Screen 1 — Sign In (`/login`) & 2-Page Sign Up (`/signup` & `/signup/details`)**
   - [x] `/login`: Index No., Password with salted cryptographic verification (`lib/password.ts`)
   - [x] `/signup` (Screen 1A): Live Barcode Scanner Viewfinder (`html5-qrcode`) with targeting laser & checksum decoding
+  - [x] iOS Safari WebKit viewfinder fix (`object-fit: cover`, absolute full-container layout, dynamic proportional `qrbox`)
   - [x] Rejection of non-UoM barcodes ("Invalid barcode. Please point camera at University Student ID")
   - [x] Real-time duplicate account detection ("Account already exists for Index Number [X]")
-  - [x] `/signup/details` (Screen 1B): Barcode Index Number strictly locked/unchangeable; Student Name & Email editable
+  - [x] `/signup/details` (Screen 1B): Barcode Index Number strictly locked/unchangeable; Student Name & Email editable (email empty by default)
   - [x] Tamper-proof HMAC verification token (`lib/auth-token.ts`) ensuring zero unverified database pollution
   - [x] `VERIFY` submission generating OTP and forwarding to `/verify`
   - [x] Password hashing with random 16-byte salt and `scrypt` for all user accounts

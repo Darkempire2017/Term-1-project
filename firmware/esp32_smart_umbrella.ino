@@ -1,21 +1,26 @@
 /*
  * =====================================================================
- * Project ASTRIX — ESP32 Smart Umbrella Station Firmware
+ * Project ASTRIX — ESP32 Smart Umbrella Station Firmware (V1)
  * University of Moratuwa (UoM)
  * 
+ * Target: ESP32-S3 / ESP32 Dev Module
  * Hardware:
- *   - ESP32 Dev Module
+ *   - 4x Solenoid Locks driven by 5V Relay Module or MOSFETs (Slots 1-4)
+ *   - Limit Microswitches for docking detection (Slots 1-4)
  *   - RC522 (or PN532) NFC/RFID Reader (SPI)
- *   - 4x 12V Solenoid Locks driven by 5V Relay Module or MOSFETs
- *   - Limit Microswitches (for physical docking detection)
- *   - Status LEDs / Buzzer
+ *   - Audible Buzzer & Status LED
  * 
- * MQTT Broker: HiveMQ Cloud / Public Broker (broker.hivemq.com:1883)
- * Official Topics:
- *   - Command Subscribe: astrix/uom/kiosk-01/command/unlock
- *   - Event Publish:     astrix/uom/kiosk-01/event/removed
- *   - Event Publish:     astrix/uom/kiosk-01/event/returned
- *   - Status Publish:    astrix/uom/kiosk-01/status
+ * Version 1 (V1) 2x2 MQTT Topic Architecture:
+ *   - Command Topics (ESP32 Subscribes):
+ *       1. astrix/uom/kiosk-01/command/borrow
+ *       2. astrix/uom/kiosk-01/command/return
+ *   - Event Topics (ESP32 Publishes):
+ *       1. astrix/uom/kiosk-01/event/borrowed
+ *       2. astrix/uom/kiosk-01/event/returned
+ *   - Status Topic:
+ *       astrix/uom/kiosk-01/status
+ * 
+ * Default Unlock Duration: 10,000ms (10 seconds)
  * =====================================================================
  */
 
@@ -29,20 +34,21 @@
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
-// 2. HiveMQ MQTT Broker Configuration
+// 2. HiveMQ MQTT Broker Configuration (Public Broker, No Auth)
 const char* MQTT_BROKER   = "broker.hivemq.com";
 const int   MQTT_PORT     = 1883;
 const char* MQTT_USER     = ""; // Leave blank for public HiveMQ broker
 const char* MQTT_PASS     = ""; // Leave blank for public HiveMQ broker
 
-// MQTT Topics (Project ASTRIX Official Topic Contracts)
-const char* TOPIC_UNLOCK   = "astrix/uom/kiosk-01/command/unlock";
-const char* TOPIC_REMOVED  = "astrix/uom/kiosk-01/event/removed";
-const char* TOPIC_RETURNED = "astrix/uom/kiosk-01/event/returned";
-const char* TOPIC_STATUS   = "astrix/uom/kiosk-01/status";
+// V1 Official 2x2 MQTT Topics
+const char* TOPIC_COMMAND_BORROW = "astrix/uom/kiosk-01/command/borrow";
+const char* TOPIC_COMMAND_RETURN = "astrix/uom/kiosk-01/command/return";
+const char* TOPIC_EVENT_BORROWED = "astrix/uom/kiosk-01/event/borrowed";
+const char* TOPIC_EVENT_RETURNED = "astrix/uom/kiosk-01/event/returned";
+const char* TOPIC_STATUS         = "astrix/uom/kiosk-01/status";
+const char* TOPIC_LEGACY_UNLOCK  = "astrix/uom/kiosk-01/command/unlock";
 
-// 3. Hardware Pin Definitions
-// RC522 NFC Reader (SPI)
+// 3. Hardware Pin Definitions (Customizable for ESP32-S3)
 #define SS_PIN    5
 #define RST_PIN   22
 
@@ -61,11 +67,12 @@ MFRC522 mfrc522(SS_PIN, RST_PIN);
 unsigned long lastHeartbeat = 0;
 String lastScannedTag = "";
 unsigned long lastScanTime = 0;
+String lastActiveUser = "";
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("\n--- Starting Project ASTRIX ESP32 Station ---");
+  Serial.println("\n--- Starting Project ASTRIX ESP32 Station (V1) ---");
 
   // Initialize Lock Relay Pins (Active LOW for standard relay boards)
   for (int i = 0; i < NUM_SLOTS; i++) {
@@ -94,7 +101,6 @@ void setup() {
 }
 
 void loop() {
-  // Ensure Wi-Fi & MQTT connection
   if (WiFi.status() != WL_CONNECTED) {
     connectWiFi();
   }
@@ -109,7 +115,7 @@ void loop() {
     sendHeartbeat();
   }
 
-  // Check for NFC Tag Scanning (Docking / Return detection)
+  // Check for NFC Tag Scanning (Return detection)
   checkForNfcTag();
 }
 
@@ -147,7 +153,10 @@ void reconnectMQTT() {
 
     if (connected) {
       Serial.println(" Connected to HiveMQ Broker!");
-      mqttClient.subscribe(TOPIC_UNLOCK);
+      // Subscribe to both V1 Command Topics
+      mqttClient.subscribe(TOPIC_COMMAND_BORROW);
+      mqttClient.subscribe(TOPIC_COMMAND_RETURN);
+      mqttClient.subscribe(TOPIC_LEGACY_UNLOCK);
       sendHeartbeat();
     } else {
       Serial.print(" failed, rc=");
@@ -187,19 +196,21 @@ void checkForNfcTag() {
   delay(100);
   digitalWrite(BUZZER_PIN, LOW);
 
-  // Publish physical return event to HiveMQ
+  // Publish physical return event to HiveMQ (V1: astrix/uom/kiosk-01/event/returned)
   StaticJsonDocument<256> doc;
+  doc["status"] = "SUCCESS";
   doc["event"] = "UMBRELLA_RETURNED";
   doc["slot"] = 1; // Or slot detected by microswitch
   doc["umbrella_id"] = tagUid;
+  doc["index_no"] = lastActiveUser.length() > 0 ? lastActiveUser : "STUDENT";
   doc["microswitch"] = true;
   doc["nfc_verified"] = true;
   doc["timestamp"] = millis();
 
   char buffer[256];
   serializeJson(doc, buffer);
-  mqttClient.publish(TOPIC_RETURNED, buffer);
-  Serial.println("📤 Published UMBRELLA_RETURNED event to HiveMQ: " + String(buffer));
+  mqttClient.publish(TOPIC_EVENT_RETURNED, buffer);
+  Serial.println("📤 Published SUCCESS to " + String(TOPIC_EVENT_RETURNED) + ": " + String(buffer));
 
   mfrc522.PICC_HaltA();
   mfrc522.PCD_StopCrypto1();
@@ -214,18 +225,19 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.println("\n📥 [MQTT Received] Topic: " + String(topic));
   Serial.println("Payload: " + message);
 
-  if (String(topic) == TOPIC_UNLOCK) {
-    StaticJsonDocument<256> doc;
-    DeserializationError error = deserializeJson(doc, message);
-    if (!error) {
-      int slot = doc["slot"] | 1;
-      int durationMs = doc["duration_ms"] | 5000;
-      const char* action = doc["action"] | "BORROW_UNLOCK";
-      const char* indexNo = doc["index_no"] | "UNKNOWN";
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, message);
+  if (!error) {
+    int slot = doc["slot"] | 1;
+    // Default 10 seconds for all unlock windows
+    int durationMs = doc["duration_ms"] | 10000;
+    const char* action = doc["action"] | (String(topic).indexOf("return") >= 0 ? "RETURN" : "BORROW");
+    const char* indexNo = doc["index_no"] | "UNKNOWN";
 
-      Serial.println("⚡ Action: " + String(action) + " for User: " + String(indexNo));
-      releaseLock(slot, durationMs, action);
-    }
+    lastActiveUser = String(indexNo);
+
+    Serial.println("⚡ Action: " + String(action) + " on Slot #" + String(slot) + " for: " + String(indexNo) + " (Duration: " + String(durationMs) + "ms)");
+    releaseLock(slot, durationMs, action);
   }
 }
 
@@ -244,14 +256,14 @@ void releaseLock(int slotNumber, int durationMs, const char* action) {
 
   // Audible Beep indication
   digitalWrite(BUZZER_PIN, HIGH);
-  delay(80);
+  delay(100);
   digitalWrite(BUZZER_PIN, LOW);
-  delay(80);
+  delay(100);
   digitalWrite(BUZZER_PIN, HIGH);
-  delay(80);
+  delay(100);
   digitalWrite(BUZZER_PIN, LOW);
 
-  // Wait for student to pull out or insert umbrella
+  // Wait 10 seconds for student to pull out or insert umbrella
   delay(durationMs);
 
   // Re-lock solenoid
@@ -271,9 +283,11 @@ void sendHeartbeat() {
   mqttClient.publish(TOPIC_STATUS, buffer);
 }
 
-void publishUmbrellaRemoved(int slotNumber, const char* indexNo) {
+// Call this when microswitch detects umbrella removed from slot
+void publishUmbrellaBorrowed(int slotNumber, const char* indexNo) {
   StaticJsonDocument<256> doc;
-  doc["event"] = "UMBRELLA_REMOVED";
+  doc["status"] = "SUCCESS";
+  doc["event"] = "UMBRELLA_BORROWED";
   doc["slot"] = slotNumber;
   doc["umbrella_id"] = (slotNumber == 1) ? "04A1B2C3D4" :
                        (slotNumber == 2) ? "04B2C3D4E5" :
@@ -283,6 +297,6 @@ void publishUmbrellaRemoved(int slotNumber, const char* indexNo) {
 
   char buffer[256];
   serializeJson(doc, buffer);
-  mqttClient.publish(TOPIC_REMOVED, buffer);
-  Serial.println("📤 Published UMBRELLA_REMOVED event to HiveMQ: " + String(buffer));
+  mqttClient.publish(TOPIC_EVENT_BORROWED, buffer);
+  Serial.println("📤 Published SUCCESS to " + String(TOPIC_EVENT_BORROWED) + ": " + String(buffer));
 }

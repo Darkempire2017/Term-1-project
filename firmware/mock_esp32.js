@@ -1,8 +1,16 @@
 /**
- * Project ASTRIX — Hardware ESP32 & Kiosk Station Simulator
+ * Project ASTRIX — Hardware ESP32 & Kiosk Station Simulator (V1)
  * 
  * Simulates the physical ESP32 microcontroller, RC522 RFID reader,
  * 4x Solenoid relays, and microswitch sensors over HiveMQ Cloud MQTT.
+ * 
+ * Version 1 (V1) 2x2 Topic Architecture:
+ *   - Subscribes to:
+ *       1. astrix/uom/kiosk-01/command/borrow
+ *       2. astrix/uom/kiosk-01/command/return
+ *   - Publishes to:
+ *       1. astrix/uom/kiosk-01/event/borrowed
+ *       2. astrix/uom/kiosk-01/event/returned
  * 
  * Usage:
  *   node firmware/mock_esp32.js
@@ -24,20 +32,23 @@ try {
 const BROKER_URL = process.env.HIVEMQ_BROKER_URL || 'mqtt://broker.hivemq.com:1883';
 const CLIENT_ID = `astrix-mock-esp32-${Math.random().toString(16).substring(2, 8)}`;
 
-const TOPIC_UNLOCK = 'astrix/uom/kiosk-01/command/unlock';
-const TOPIC_REMOVED = 'astrix/uom/kiosk-01/event/removed';
-const TOPIC_RETURNED = 'astrix/uom/kiosk-01/event/returned';
+// V1 2x2 Official Topics
+const TOPIC_COMMAND_BORROW = 'astrix/uom/kiosk-01/command/borrow';
+const TOPIC_COMMAND_RETURN = 'astrix/uom/kiosk-01/command/return';
+const TOPIC_EVENT_BORROWED = 'astrix/uom/kiosk-01/event/borrowed';
+const TOPIC_EVENT_RETURNED = 'astrix/uom/kiosk-01/event/returned';
 const TOPIC_STATUS = 'astrix/uom/kiosk-01/status';
+const TOPIC_LEGACY_UNLOCK = 'astrix/uom/kiosk-01/command/unlock';
 
 const SLOTS = [
-  { slot: 1, umbrella_id: '04A1B2C3D4', docked: true, unlocked: false },
-  { slot: 2, umbrella_id: '04B2C3D4E5', docked: true, unlocked: false },
-  { slot: 3, umbrella_id: '04C3D4E5F6', docked: true, unlocked: false },
-  { slot: 4, umbrella_id: '04D4E5F6A7', docked: true, unlocked: false },
+  { slot: 1, umbrella_id: '04A1B2C3D4', docked: true, unlocked: false, last_user: 'DEV001' },
+  { slot: 2, umbrella_id: '04B2C3D4E5', docked: true, unlocked: false, last_user: null },
+  { slot: 3, umbrella_id: '04C3D4E5F6', docked: true, unlocked: false, last_user: null },
+  { slot: 4, umbrella_id: '04D4E5F6A7', docked: true, unlocked: false, last_user: null },
 ];
 
 console.log('☂️ ======================================================');
-console.log('☂️   PROJECT ASTRIX — ESP32 HARDWARE KIOSK SIMULATOR    ');
+console.log('☂️   PROJECT ASTRIX — ESP32 HARDWARE KIOSK SIMULATOR (V1)');
 console.log('☂️ ======================================================');
 console.log(`🔌 Connecting to HiveMQ Broker: ${BROKER_URL}...`);
 
@@ -50,11 +61,15 @@ const client = mqtt.connect(BROKER_URL, {
 client.on('connect', () => {
   console.log(`✅ [ESP32 Simulator] Connected to HiveMQ Broker! (Client ID: ${CLIENT_ID})`);
 
-  client.subscribe(TOPIC_UNLOCK, (err) => {
+  const commandTopics = [TOPIC_COMMAND_BORROW, TOPIC_COMMAND_RETURN, TOPIC_LEGACY_UNLOCK];
+
+  client.subscribe(commandTopics, (err) => {
     if (err) {
       console.error('❌ [ESP32 Simulator] Subscription error:', err);
     } else {
-      console.log(`📡 [ESP32 Simulator] Listening for Solenoid Unlock commands on:\n   👉 ${TOPIC_UNLOCK}\n`);
+      console.log(`📡 [ESP32 Simulator] Subscribed to V1 Command topics:`);
+      commandTopics.forEach((t) => console.log(`   👉 ${t}`));
+      console.log('');
     }
   });
 
@@ -74,24 +89,23 @@ client.on('connect', () => {
 });
 
 client.on('message', (topic, message) => {
-  if (topic === TOPIC_UNLOCK) {
-    try {
-      const data = JSON.parse(message.toString());
-      handleUnlockCommand(data);
-    } catch (e) {
-      console.error('❌ Error parsing unlock command:', e.message);
-    }
+  try {
+    const data = JSON.parse(message.toString());
+    const action = topic.includes('return') ? 'RETURN' : (data.action || 'BORROW');
+    handleUnlockCommand({ ...data, action });
+  } catch (e) {
+    console.error('❌ Error parsing command:', e.message);
   }
 });
 
 function handleUnlockCommand(data) {
-  const { action, slot, duration_ms = 5000, index_no } = data;
+  const { action = 'BORROW', slot = 1, duration_ms = 10000, index_no } = data;
   const slotData = SLOTS.find((s) => s.slot === slot);
 
   console.log('\n⚡ ======================================================');
   console.log(`⚡ [SOLENOID TRIGGER] ${action} for Slot #${slot}`);
   console.log(`⚡ User: ${index_no || 'Unknown'} | Window: ${duration_ms / 1000}s`);
-  console.log(`⚡ 🟢 RELAY PIN HIGH — SOLENOID LATCH RELEASED`);
+  console.log(`⚡ 🟢 RELAY PIN LOW — SOLENOID LATCH RELEASED`);
   console.log('⚡ ======================================================\n');
 
   if (slotData) {
@@ -101,12 +115,12 @@ function handleUnlockCommand(data) {
     }
   }
 
-  // Timer simulation to lock relay back
+  // 10-second timer simulation to lock relay back
   setTimeout(() => {
     if (slotData) {
       slotData.unlocked = false;
     }
-    console.log(`\n🔒 [SOLENOID RELAY] Slot #${slot} locked back. Relay pin LOW.\n`);
+    console.log(`\n🔒 [SOLENOID RELAY] Slot #${slot} locked back. Relay pin HIGH (De-energized).\n`);
     printMenu();
   }, duration_ms);
 }
@@ -117,17 +131,22 @@ function simulateUmbrellaRemoved(slotNum) {
 
   slotData.docked = false;
   const payload = {
-    event: 'UMBRELLA_REMOVED',
+    status: 'SUCCESS',
+    event: 'UMBRELLA_BORROWED',
     slot: slotNum,
     umbrella_id: slotData.umbrella_id,
     index_no: slotData.last_user || 'DEV001',
     timestamp: Date.now(),
   };
 
-  client.publish(TOPIC_REMOVED, JSON.stringify(payload));
-  console.log(`\n📤 [PUBLISHED EVENT] Umbrella removed from Slot #${slotNum}`);
-  console.log(`   Topic: ${TOPIC_REMOVED}`);
-  console.log(`   Tag: ${slotData.umbrella_id}\n`);
+  client.publish(TOPIC_EVENT_BORROWED, JSON.stringify(payload));
+  // Backward compatibility publish
+  client.publish('astrix/uom/kiosk-01/event/removed', JSON.stringify(payload));
+
+  console.log(`\n📤 [PUBLISHED EVENT] Successfully Borrowed from Slot #${slotNum}`);
+  console.log(`   Topic: ${TOPIC_EVENT_BORROWED}`);
+  console.log(`   Payload:`, payload);
+  console.log('');
 }
 
 function simulateUmbrellaReturned(slotNum) {
@@ -136,18 +155,21 @@ function simulateUmbrellaReturned(slotNum) {
 
   slotData.docked = true;
   const payload = {
+    status: 'SUCCESS',
     event: 'UMBRELLA_RETURNED',
     slot: slotNum,
     umbrella_id: slotData.umbrella_id,
+    index_no: slotData.last_user || 'DEV001',
     microswitch: true,
     nfc_verified: true,
     timestamp: Date.now(),
   };
 
-  client.publish(TOPIC_RETURNED, JSON.stringify(payload));
-  console.log(`\n📥 [PUBLISHED EVENT] Umbrella returned to Slot #${slotNum}`);
-  console.log(`   Topic: ${TOPIC_RETURNED}`);
-  console.log(`   Tag: ${slotData.umbrella_id}\n`);
+  client.publish(TOPIC_EVENT_RETURNED, JSON.stringify(payload));
+  console.log(`\n📥 [PUBLISHED EVENT] Successfully Returned to Slot #${slotNum}`);
+  console.log(`   Topic: ${TOPIC_EVENT_RETURNED}`);
+  console.log(`   Payload:`, payload);
+  console.log('');
 }
 
 function printMenu() {

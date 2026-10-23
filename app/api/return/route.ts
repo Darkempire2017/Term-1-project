@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { publishUnlockCommand } from '@/lib/mqtt';
+import { publishReturnCommand } from '@/lib/mqtt';
 import { sendReturnReceiptEmail } from '@/lib/email';
 
 export async function POST(request: Request) {
@@ -72,8 +72,8 @@ export async function POST(request: Request) {
       })
       .eq('record_id', activeLoan.record_id);
 
-    // 5. Publish HiveMQ MQTT return unlock command (8s window to insert umbrella)
-    const mqttResult = await publishUnlockCommand('RETURN_UNLOCK', targetSlot, cleanIndex, 8000);
+    // 5. Publish HiveMQ MQTT return unlock command (V1: 10-second window to insert umbrella)
+    const mqttResult = await publishReturnCommand(targetSlot, cleanIndex, 10000);
 
     // 6. Fetch user profile and send email receipt in background
     (async () => {

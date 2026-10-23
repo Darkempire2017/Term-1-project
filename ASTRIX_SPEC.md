@@ -87,14 +87,16 @@
 
 ---
 
-## 📡 MQTT Interface Contracts (HiveMQ Cloud)
+## 📡 MQTT Interface Contracts (HiveMQ Cloud — Version 1 2×2 Architecture)
 
-* **Command Topic:** `astrix/uom/kiosk-01/command/unlock`
-  * Borrow: `{"action": "BORROW_UNLOCK", "slot": 1, "duration_ms": 5000, "index_no": "210042A"}`
-  * Return: `{"action": "RETURN_UNLOCK", "slot": 2, "duration_ms": 8000, "index_no": "210042A"}`
-* **Removal Event Topic:** `astrix/uom/kiosk-01/event/removed`
-  * Payload: `{"event": "UMBRELLA_REMOVED", "slot": 1, "umbrella_id": "04A1B2C3D4", "index_no": "210042A"}`
-* **Return Event Topic:** `astrix/uom/kiosk-01/event/returned`
-  * Payload: `{"event": "UMBRELLA_RETURNED", "slot": 2, "umbrella_id": "04A1B2C3D4", "microswitch": true, "nfc_verified": true}`
-* **Heartbeat Topic:** `astrix/uom/kiosk-01/status`
+* **Borrow Command Topic (Web Publishes ➔ ESP32 Subscribes):** `astrix/uom/kiosk-01/command/borrow`
+  * Payload: `{"action": "BORROW", "slot": 1, "duration_ms": 10000, "index_no": "250373T"}`
+* **Return Command Topic (Web Publishes ➔ ESP32 Subscribes):** `astrix/uom/kiosk-01/command/return`
+  * Payload: `{"action": "RETURN", "slot": 1, "duration_ms": 10000, "index_no": "250373T"}`
+* **Borrow Success Event Topic (ESP32 Publishes ➔ Web Subscribes):** `astrix/uom/kiosk-01/event/borrowed`
+  * Payload: `{"status": "SUCCESS", "slot": 1, "umbrella_id": "04A1B2C3D4", "index_no": "250373T"}`
+* **Return Success Event Topic (ESP32 Publishes ➔ Web Subscribes):** `astrix/uom/kiosk-01/event/returned`
+  * Payload: `{"status": "SUCCESS", "slot": 1, "umbrella_id": "04A1B2C3D4", "index_no": "250373T"}`
+* **Heartbeat Topic (ESP32 Publishes):** `astrix/uom/kiosk-01/status`
+  * Payload: `{"station_id": "kiosk-01", "online": true, "timestamp": 1792474441000}`
   * Payload: `{"station_id": "kiosk-01", "online": true, "timestamp": 1792474441000}`

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { publishUnlockCommand } from '@/lib/mqtt';
+import { publishBorrowCommand } from '@/lib/mqtt';
 
 export async function POST(request: Request) {
   try {
@@ -55,17 +55,17 @@ export async function POST(request: Request) {
 
     const { slot, umbrella_id } = availableSlot;
 
-    // 3. Publish HiveMQ MQTT solenoid unlock command (5-second unlock pulse)
-    const mqttResult = await publishUnlockCommand('BORROW_UNLOCK', slot, cleanIndex, 5000);
+    // 3. Publish HiveMQ MQTT solenoid borrow command (V1: 10-second unlock window)
+    const mqttResult = await publishBorrowCommand(slot, cleanIndex, 10000);
 
     // Note: Do NOT mark umbrella as borrowed in DB yet.
-    // The loan is only created when the ESP32 detects the umbrella is physically off the rack (event/removed).
+    // The loan is only created when the ESP32 detects the umbrella is physically off the rack (event/borrowed).
     return NextResponse.json({
       success: true,
-      message: `Slot #${slot} unlocked for 5 seconds. Pull the umbrella to complete borrow.`,
+      message: `Slot #${slot} unlocked for 10 seconds. Pull the umbrella to complete borrow.`,
       slot,
       umbrella_id,
-      duration_ms: 5000,
+      duration_ms: 10000,
       mqtt: mqttResult,
     });
   } catch (error: any) {

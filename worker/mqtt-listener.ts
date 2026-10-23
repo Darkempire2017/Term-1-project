@@ -10,9 +10,10 @@
 import mqtt from 'mqtt';
 import { supabaseAdmin } from '../lib/supabase';
 import {
-  MQTT_TOPIC_REMOVED,
-  MQTT_TOPIC_RETURNED,
+  MQTT_TOPIC_EVENT_BORROWED,
+  MQTT_TOPIC_EVENT_RETURNED,
   MQTT_TOPIC_STATUS,
+  MQTT_TOPIC_REMOVED,
 } from '../lib/mqtt';
 import {
   sendBorrowReceiptEmail,
@@ -23,7 +24,7 @@ const brokerUrl = process.env.HIVEMQ_BROKER_URL || 'mqtt://broker.hivemq.com:188
 const username = process.env.HIVEMQ_USERNAME;
 const password = process.env.HIVEMQ_PASSWORD;
 
-console.log('☂️ [ASTRIX Worker] Starting HiveMQ MQTT Background Listener...');
+console.log('☂️ [ASTRIX Worker] Starting HiveMQ MQTT Background Listener (V1)...');
 console.log(`🔌 Broker: ${brokerUrl}`);
 
 const options: mqtt.IClientOptions = {
@@ -39,15 +40,20 @@ if (password) options.password = password;
 const client = mqtt.connect(brokerUrl, options);
 
 client.on('connect', () => {
-  console.log('✅ [ASTRIX Worker] Successfully connected to HiveMQ Cloud!');
+  console.log('✅ [ASTRIX Worker] Successfully connected to HiveMQ Broker!');
 
-  const topics = [MQTT_TOPIC_REMOVED, MQTT_TOPIC_RETURNED, MQTT_TOPIC_STATUS];
+  const topics = [
+    MQTT_TOPIC_EVENT_BORROWED,
+    MQTT_TOPIC_EVENT_RETURNED,
+    MQTT_TOPIC_STATUS,
+    'astrix/uom/kiosk-01/event/removed', // Backward compatibility
+  ];
 
   client.subscribe(topics, (err) => {
     if (err) {
       console.error('❌ [ASTRIX Worker] Subscription error:', err.message);
     } else {
-      console.log('📡 [ASTRIX Worker] Subscribed to hardware topics:');
+      console.log('📡 [ASTRIX Worker] Subscribed to V1 Event topics:');
       topics.forEach((t) => console.log(`   - ${t}`));
     }
   });
@@ -60,10 +66,10 @@ client.on('message', async (topic, message) => {
 
     console.log(`\n📨 [ASTRIX Worker] Event on [${topic}]:`, data);
 
-    // 1. Umbrella Removed from Station (Borrow Complete)
-    if (topic === MQTT_TOPIC_REMOVED) {
+    // 1. Umbrella Successfully Borrowed (event/borrowed or legacy event/removed)
+    if (topic === MQTT_TOPIC_EVENT_BORROWED || topic === 'astrix/uom/kiosk-01/event/removed') {
       const { slot, umbrella_id, index_no } = data;
-      console.log(`☂️ [EVENT] Umbrella (${umbrella_id}) removed from Slot #${slot} by ${index_no || 'user'}`);
+      console.log(`☂️ [EVENT: BORROWED] Umbrella (${umbrella_id}) removed from Slot #${slot} by ${index_no || 'user'}`);
 
       // Lookup default umbrella tag UID if omitted
       let tagId = umbrella_id;
@@ -139,7 +145,7 @@ client.on('message', async (topic, message) => {
     }
 
     // 2. Umbrella Returned and Docked in Station (Return Complete)
-    else if (topic === MQTT_TOPIC_RETURNED) {
+    else if (topic === MQTT_TOPIC_EVENT_RETURNED) {
       const { slot, umbrella_id } = data;
       console.log(`✅ [EVENT] Umbrella (${umbrella_id}) physically returned to Slot #${slot}`);
 

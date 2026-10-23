@@ -1,41 +1,52 @@
 import mqtt from 'mqtt';
 
-export const MQTT_TOPIC_UNLOCK = 'astrix/uom/kiosk-01/command/unlock';
-export const MQTT_TOPIC_REMOVED = 'astrix/uom/kiosk-01/event/removed';
-export const MQTT_TOPIC_RETURNED = 'astrix/uom/kiosk-01/event/returned';
+// =====================================================================
+// Version 1 (V1) Official 2x2 MQTT Topics
+// =====================================================================
+// 1. Commands (Web App Publishes ➔ ESP32 Subscribes)
+export const MQTT_TOPIC_COMMAND_BORROW = 'astrix/uom/kiosk-01/command/borrow';
+export const MQTT_TOPIC_COMMAND_RETURN = 'astrix/uom/kiosk-01/command/return';
+
+// 2. Events / Confirmations (ESP32 Publishes ➔ Web Worker Subscribes)
+export const MQTT_TOPIC_EVENT_BORROWED = 'astrix/uom/kiosk-01/event/borrowed';
+export const MQTT_TOPIC_EVENT_RETURNED = 'astrix/uom/kiosk-01/event/returned';
+
+// 3. Station Online Heartbeat
 export const MQTT_TOPIC_STATUS = 'astrix/uom/kiosk-01/status';
 
+// Backwards compatibility aliases
+export const MQTT_TOPIC_UNLOCK = MQTT_TOPIC_COMMAND_BORROW;
+export const MQTT_TOPIC_REMOVED = MQTT_TOPIC_EVENT_BORROWED;
+
+export interface KioskCommandPayload {
+  action: 'BORROW' | 'RETURN';
+  slot: number;
+  duration_ms: number;
+  index_no: string;
+}
+
 export interface UnlockPayload {
-  action: 'BORROW_UNLOCK' | 'RETURN_UNLOCK';
+  action: 'BORROW_UNLOCK' | 'RETURN_UNLOCK' | 'BORROW' | 'RETURN';
   slot: number;
   duration_ms: number;
   index_no: string;
 }
 
 /**
- * Publish solenoid lock release command to HiveMQ Cloud
+ * Universal MQTT Publisher to HiveMQ Cloud / Public Broker
  */
-export async function publishUnlockCommand(
-  action: 'BORROW_UNLOCK' | 'RETURN_UNLOCK',
-  slot: number,
-  indexNo: string,
-  durationMs: number = action === 'BORROW_UNLOCK' ? 5000 : 8000
+async function sendMqttMessage(
+  topic: string,
+  payload: any
 ): Promise<{ success: boolean; simulated?: boolean; error?: string }> {
-  const brokerUrl = process.env.HIVEMQ_BROKER_URL;
+  const brokerUrl = process.env.HIVEMQ_BROKER_URL || 'mqtt://broker.hivemq.com:1883';
   const username = process.env.HIVEMQ_USERNAME;
   const password = process.env.HIVEMQ_PASSWORD;
-
-  const payload: UnlockPayload = {
-    action,
-    slot,
-    duration_ms: durationMs,
-    index_no: indexNo,
-  };
 
   const payloadString = JSON.stringify(payload);
 
   console.log(`\n======================================================`);
-  console.log(`📡 [MQTT PUBLISH] Topic: ${MQTT_TOPIC_UNLOCK}`);
+  console.log(`📡 [MQTT PUBLISH] Topic: ${topic}`);
   console.log(`📦 Payload: ${payloadString}`);
   console.log(`======================================================\n`);
 
@@ -72,7 +83,7 @@ export async function publishUnlockCommand(
       client = mqtt.connect(brokerUrl, options);
 
       client.on('connect', () => {
-        client?.publish(MQTT_TOPIC_UNLOCK, payloadString, { qos: 1 }, (err) => {
+        client?.publish(topic, payloadString, { qos: 1 }, (err) => {
           clearTimeout(timeout);
           if (!resolved) {
             resolved = true;
@@ -80,7 +91,7 @@ export async function publishUnlockCommand(
               console.warn('⚠️ [HiveMQ] Publish error:', err.message);
               resolve({ success: false, error: err.message });
             } else {
-              console.log(' [HiveMQ] Solenoid unlock command delivered to broker.');
+              console.log('✅ [HiveMQ] Command delivered to broker successfully.');
               resolve({ success: true, simulated: false });
             }
             client?.end();
@@ -106,4 +117,55 @@ export async function publishUnlockCommand(
       }
     }
   });
+}
+
+/**
+ * Publish Borrow Unlock Command to ESP32 (V1: astrix/uom/kiosk-01/command/borrow)
+ * Default Duration: 10,000ms (10 seconds)
+ */
+export async function publishBorrowCommand(
+  slot: number,
+  indexNo: string,
+  durationMs: number = 10000
+) {
+  const payload: KioskCommandPayload = {
+    action: 'BORROW',
+    slot,
+    duration_ms: durationMs,
+    index_no: indexNo,
+  };
+  return sendMqttMessage(MQTT_TOPIC_COMMAND_BORROW, payload);
+}
+
+/**
+ * Publish Return Unlock Command to ESP32 (V1: astrix/uom/kiosk-01/command/return)
+ * Default Duration: 10,000ms (10 seconds)
+ */
+export async function publishReturnCommand(
+  slot: number,
+  indexNo: string,
+  durationMs: number = 10000
+) {
+  const payload: KioskCommandPayload = {
+    action: 'RETURN',
+    slot,
+    duration_ms: durationMs,
+    index_no: indexNo,
+  };
+  return sendMqttMessage(MQTT_TOPIC_COMMAND_RETURN, payload);
+}
+
+/**
+ * Universal unlock command (backward compatibility)
+ */
+export async function publishUnlockCommand(
+  action: 'BORROW_UNLOCK' | 'RETURN_UNLOCK' | 'BORROW' | 'RETURN',
+  slot: number,
+  indexNo: string,
+  durationMs: number = 10000
+) {
+  if (action === 'RETURN_UNLOCK' || action === 'RETURN') {
+    return publishReturnCommand(slot, indexNo, durationMs);
+  }
+  return publishBorrowCommand(slot, indexNo, durationMs);
 }

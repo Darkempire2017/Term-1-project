@@ -179,13 +179,13 @@ export default function DashboardPage() {
         return;
       }
 
-      // 2. Start active 5-second physical unlock countdown
+      // 2. Start active 10-second physical unlock countdown
       setNotification({
         type: 'info',
-        text: `🔓 Slot #${targetSlot} unlocked! Please pull the umbrella off the rack within 5 seconds.`,
+        text: `🔓 Slot #${targetSlot} unlocked! Please pull the umbrella off the rack within 10 seconds.`,
       });
 
-      let remaining = 5;
+      let remaining = 10;
       setUnlockCountdown(remaining);
 
       const countdownTimer = setInterval(async () => {
@@ -222,7 +222,7 @@ export default function DashboardPage() {
             // Station isn't live yet or umbrella was not pulled off rack
             setNotification({
               type: 'info',
-              text: `🔒 5s window expired. Solenoid re-locked on Slot #${targetSlot}. Umbrella was not removed.`,
+              text: `🔒 10s window expired. Solenoid re-locked on Slot #${targetSlot}. Umbrella was not removed.`,
             });
             refreshStationData();
           }

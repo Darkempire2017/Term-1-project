@@ -15,7 +15,7 @@ import {
   MQTT_TOPIC_STATUS,
 } from '../lib/mqtt';
 
-const brokerUrl = process.env.HIVEMQ_BROKER_URL || 'mqtts://your-cluster-id.s1.eu.hivemq.cloud:8883';
+const brokerUrl = process.env.HIVEMQ_BROKER_URL || 'mqtt://broker.hivemq.com:1883';
 const username = process.env.HIVEMQ_USERNAME;
 const password = process.env.HIVEMQ_PASSWORD;
 

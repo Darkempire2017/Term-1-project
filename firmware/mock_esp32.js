@@ -21,7 +21,7 @@ try {
   }
 }
 
-const BROKER_URL = process.env.HIVEMQ_BROKER_URL || 'mqtts://broker.hivemq.com:8883';
+const BROKER_URL = process.env.HIVEMQ_BROKER_URL || 'mqtt://broker.hivemq.com:1883';
 const CLIENT_ID = `astrix-mock-esp32-${Math.random().toString(16).substring(2, 8)}`;
 
 const TOPIC_UNLOCK = 'astrix/uom/kiosk-01/command/unlock';

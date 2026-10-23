@@ -30,6 +30,11 @@ function LoginForm() {
     if (isVerified) {
       setSuccess('✅ Email verified & password created! Enter your credentials to sign in.');
     }
+
+    const notice = searchParams.get('notice');
+    if (notice === 'session_expired') {
+      setError('Your session has ended because this account was removed from the system. Please register or sign in again.');
+    }
   }, [searchParams]);
 
   const handleSignIn = async (e: React.FormEvent) => {

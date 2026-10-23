@@ -73,13 +73,20 @@ export default function ProfilePage() {
           .eq('index_no', currentIndex)
           .maybeSingle();
 
-        if (dbUser) {
+        if (dbUser && dbUser.is_verified) {
           setProfile({
             index_no: dbUser.index_no,
             username: dbUser.username,
             email: dbUser.email,
-            is_verified: dbUser.is_verified ?? true,
+            is_verified: true,
           });
+        } else {
+          // Account no longer exists in Supabase! Auto-logout immediately
+          console.warn(`⚠️ Profile user ${currentIndex} not found in database. Auto-logging out...`);
+          localStorage.removeItem('astrix_user');
+          sessionStorage.clear();
+          router.replace('/login?notice=session_expired');
+          return;
         }
 
         // 3. Query active borrow record
@@ -104,7 +111,9 @@ export default function ProfilePage() {
     };
 
     fetchUserData();
-  }, []);
+    const interval = setInterval(fetchUserData, 3500);
+    return () => clearInterval(interval);
+  }, [router]);
 
   const handleSignOut = () => {
     localStorage.removeItem('astrix_user');

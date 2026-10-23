@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Umbrella,
   Lock,
@@ -22,9 +23,10 @@ import { Umbrella as UmbrellaSlotType, BorrowRecord } from '@/lib/types';
 import { useViewMode } from '@/components/ViewModeContext';
 
 export default function DashboardPage() {
+  const router = useRouter();
   const { isStudentMode } = useViewMode();
-  const [currentUserIndex, setCurrentUserIndex] = useState('DEV001');
-  const [currentUserName, setCurrentUserName] = useState('Developer Account');
+  const [currentUserIndex, setCurrentUserIndex] = useState('');
+  const [currentUserName, setCurrentUserName] = useState('');
 
   // Supabase slot states
   const [slots, setSlots] = useState<UmbrellaSlotType[]>([
@@ -58,29 +60,37 @@ export default function DashboardPage() {
         const parsed = JSON.parse(raw);
         if (parsed.index_no && parsed.index_no.length >= 3) {
           setCurrentUserIndex(parsed.index_no.toUpperCase());
-          setCurrentUserName(parsed.username || 'Developer Account');
+          setCurrentUserName(parsed.username || 'Student');
           return;
         }
       }
-      // Set clean default developer account
-      localStorage.setItem(
-        'astrix_user',
-        JSON.stringify({
-          index_no: 'DEV001',
-          username: 'Developer Account',
-          email: 'dev@astrix.uom.lk',
-        })
-      );
-      setCurrentUserIndex('DEV001');
-      setCurrentUserName('Developer Account');
+      // No active session — redirect to login
+      router.replace('/login');
     } catch (e) {
-      console.warn('Session parse:', e);
+      router.replace('/login');
     }
-  }, []);
+  }, [router]);
 
-  // Fetch slots and active loan from Supabase
+  // Fetch slots, active loan, and verify active user exists in Supabase
   const refreshStationData = async () => {
+    if (!currentUserIndex) return;
+
     try {
+      // 0. Verify that the student still exists and is verified in Supabase
+      const { data: dbUser, error: userErr } = await supabase
+        .from('users')
+        .select('index_no, is_verified')
+        .eq('index_no', currentUserIndex)
+        .maybeSingle();
+
+      if (!dbUser || !dbUser.is_verified) {
+        console.warn(`⚠️ Account ${currentUserIndex} no longer exists in database. Auto-logging out...`);
+        localStorage.removeItem('astrix_user');
+        sessionStorage.clear();
+        router.replace('/login?notice=session_expired');
+        return;
+      }
+
       // 1. Fetch slots 1-4 from Supabase umbrellas table
       const { data: dbSlots, error: slotsErr } = await supabase
         .from('umbrellas')
@@ -119,9 +129,11 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    refreshStationData();
-    const interval = setInterval(refreshStationData, 5000);
-    return () => clearInterval(interval);
+    if (currentUserIndex) {
+      refreshStationData();
+      const interval = setInterval(refreshStationData, 3500);
+      return () => clearInterval(interval);
+    }
   }, [currentUserIndex]);
 
   // Next available slot calculation (lowest slot where availability = true)

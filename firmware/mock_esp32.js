@@ -96,6 +96,9 @@ function handleUnlockCommand(data) {
 
   if (slotData) {
     slotData.unlocked = true;
+    if (index_no) {
+      slotData.last_user = index_no;
+    }
   }
 
   // Timer simulation to lock relay back
@@ -117,6 +120,7 @@ function simulateUmbrellaRemoved(slotNum) {
     event: 'UMBRELLA_REMOVED',
     slot: slotNum,
     umbrella_id: slotData.umbrella_id,
+    index_no: slotData.last_user || 'DEV001',
     timestamp: Date.now(),
   };
 

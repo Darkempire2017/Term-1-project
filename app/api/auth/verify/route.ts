@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { verifyVerificationToken } from '@/lib/auth-token';
 import { hashPassword } from '@/lib/password';
+import { sendWelcomeSignupEmail } from '@/lib/email';
 
 export async function POST(request: Request) {
   try {
@@ -113,6 +114,19 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+
+    // 4. Send Welcome & Account Activation confirmation email in background
+    (async () => {
+      try {
+        await sendWelcomeSignupEmail(
+          studentData.email,
+          studentData.username,
+          studentData.index_no
+        );
+      } catch (emailErr: any) {
+        console.warn('⚠️ [API/Auth/Verify] Welcome email warning:', emailErr?.message);
+      }
+    })();
 
     return NextResponse.json({
       success: true,

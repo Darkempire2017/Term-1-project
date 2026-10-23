@@ -235,3 +235,70 @@ export async function sendReturnReceiptEmail(
     html,
   });
 }
+
+/**
+ * Dispatch Welcome / Successful Signup confirmation email
+ */
+export async function sendWelcomeSignupEmail(
+  toEmail: string,
+  studentName: string,
+  indexNo: string
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  console.log(`\n======================================================`);
+  console.log(`🎉 [WELCOME DISPATCH] Account Created for ${toEmail}:`);
+  console.log(`👤 Student: ${studentName}`);
+  console.log(`🎓 Index No: ${indexNo}`);
+  console.log(`======================================================\n`);
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 20px; background-color: #ffffff;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <div style="display: inline-block; width: 52px; height: 52px; line-height: 52px; border-radius: 16px; background-color: #0284c7; color: #ffffff; font-size: 26px;">
+          ☂️
+        </div>
+        <h2 style="color: #0f172a; margin-top: 12px; margin-bottom: 4px; font-weight: 800;">Welcome to ASTRIX!</h2>
+        <p style="color: #64748b; font-size: 13px; margin: 0;">Smart Umbrella Sharing &bull; University of Moratuwa</p>
+      </div>
+
+      <p style="color: #334155; font-size: 15px; line-height: 1.6;">
+        Hello <strong>${studentName}</strong>,
+      </p>
+      <p style="color: #475569; font-size: 14px; line-height: 1.6;">
+        Your student account has been successfully verified and activated. You can now borrow smart umbrellas from any campus kiosk station whenever needed!
+      </p>
+
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px; margin: 20px 0;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px;">
+          <span style="color: #64748b;">University Index:</span>
+          <strong style="color: #0f172a; font-family: monospace;">${indexNo}</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px;">
+          <span style="color: #64748b;">Registered Email:</span>
+          <strong style="color: #0f172a;">${toEmail}</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 13px;">
+          <span style="color: #64748b;">Account Status:</span>
+          <strong style="color: #059669;">Verified & Active</strong>
+        </div>
+      </div>
+
+      <div style="background-color: #f0f9ff; border: 1px solid #bae6fd; border-radius: 12px; padding: 14px; margin-bottom: 20px;">
+        <p style="color: #0369a1; font-size: 12px; font-weight: 700; margin: 0 0 4px 0;">☂️ How to Borrow:</p>
+        <p style="color: #0c4a6e; font-size: 12px; margin: 0; line-height: 1.5;">
+          Sign in on your mobile phone, tap <strong>Borrow Umbrella</strong>, and your assigned slot will unlock automatically at the kiosk station.
+        </p>
+      </div>
+
+      <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
+      <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+        Project ASTRIX &bull; Smart Campus IoT System &bull; University of Moratuwa
+      </p>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: toEmail,
+    subject: `🎉 Welcome to ASTRIX — Account Successfully Activated (${indexNo})`,
+    html,
+  });
+}

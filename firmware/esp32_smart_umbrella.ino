@@ -270,3 +270,19 @@ void sendHeartbeat() {
   serializeJson(doc, buffer);
   mqttClient.publish(TOPIC_STATUS, buffer);
 }
+
+void publishUmbrellaRemoved(int slotNumber, const char* indexNo) {
+  StaticJsonDocument<256> doc;
+  doc["event"] = "UMBRELLA_REMOVED";
+  doc["slot"] = slotNumber;
+  doc["umbrella_id"] = (slotNumber == 1) ? "04A1B2C3D4" :
+                       (slotNumber == 2) ? "04B2C3D4E5" :
+                       (slotNumber == 3) ? "04C3D4E5F6" : "04D4E5F6A7";
+  doc["index_no"] = indexNo;
+  doc["timestamp"] = millis();
+
+  char buffer[256];
+  serializeJson(doc, buffer);
+  mqttClient.publish(TOPIC_REMOVED, buffer);
+  Serial.println("📤 Published UMBRELLA_REMOVED event to HiveMQ: " + String(buffer));
+}

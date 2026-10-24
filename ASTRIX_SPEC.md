@@ -27,9 +27,12 @@
   - [x] `VERIFY` submission generating OTP and forwarding to `/verify`
   - [x] Password hashing with random 16-byte salt and `scrypt` for all user accounts
 - [x] **Step 4: Screen 2 — Verify / Reset Password (`/verify`)**
-  - [x] 6-digit OTP verification code inputs
-  - [x] New Password and Verify Password fields
-  - [x] Submission and redirect to login/dashboard
+  - [x] 6-digit OTP verification code inputs with auto-focus and clipboard pasting
+  - [x] Secure Password Reset pipeline (`/api/auth/forgot-password`): looks up registered email by Index No., generates 15-minute OTP, and emails reset code via Gmail SMTP
+  - [x] Smooth "Forgot Password?" modal on `/login` with masked email feedback
+  - [x] New Password and Confirm Password validation
+  - [x] Cryptographic password replacement in Supabase `users` table using `scrypt` with unique 16-byte random salt
+  - [x] Instant post-reset sign-in and redirect to `/login?reset=success`
 - [x] **Step 5: Screen 3 — User Profile (`/profile`)**
   - [x] User avatar, display name, and university Index Number from Supabase (or demo session)
   - [x] Rental history preview and logout button

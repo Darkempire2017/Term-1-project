@@ -19,8 +19,15 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  // Forgot Password Modal State
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotIndex, setForgotIndex] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+
   useEffect(() => {
     const isVerified = searchParams.get('verified') === 'true';
+    const isReset = searchParams.get('reset') === 'success';
     const paramIndex = searchParams.get('index_no');
 
     if (paramIndex) {
@@ -29,6 +36,8 @@ function LoginForm() {
 
     if (isVerified) {
       setSuccess('✅ Email verified & password created! Enter your credentials to sign in.');
+    } else if (isReset) {
+      setSuccess('✅ Password reset successfully! Please sign in with your new password.');
     }
 
     const notice = searchParams.get('notice');
@@ -36,6 +45,50 @@ function LoginForm() {
       setError('Your session has ended because this account was removed from the system. Please register or sign in again.');
     }
   }, [searchParams]);
+
+  const handleOpenForgotModal = () => {
+    setForgotIndex(indexNo.trim().toUpperCase());
+    setForgotError(null);
+    setShowForgotModal(true);
+  };
+
+  const handleSendResetCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError(null);
+
+    const cleanIdx = forgotIndex.trim().toUpperCase();
+    if (!cleanIdx) {
+      setForgotError('Please enter your University Index Number.');
+      return;
+    }
+
+    setForgotLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index_no: cleanIdx }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        setForgotError(json.message || 'Could not send reset code. Please check your Index Number.');
+        setForgotLoading(false);
+        return;
+      }
+
+      // Successfully dispatched OTP email! Redirect to /verify in reset mode
+      setShowForgotModal(false);
+      router.push(
+        `/verify?mode=reset&index_no=${encodeURIComponent(cleanIdx)}&email=${encodeURIComponent(json.masked_email || '')}`
+      );
+    } catch (err: any) {
+      setForgotError(err.message || 'Failed to connect. Please try again.');
+      setForgotLoading(false);
+    }
+  };
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,12 +213,13 @@ function LoginForm() {
             <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
               Password
             </label>
-            <Link
-              href="/verify"
+            <button
+              type="button"
+              onClick={handleOpenForgotModal}
               className="text-xs font-medium text-sky-600 hover:text-sky-700 hover:underline"
             >
               Forgot Password?
-            </Link>
+            </button>
           </div>
           <div className="relative">
             <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -221,6 +275,82 @@ function LoginForm() {
           </Link>
         </div>
       </form>
+
+      {/* Forgot Password Modal */}
+      {showForgotModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-black text-slate-900 tracking-tight">Reset Password</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Enter your University Index Number to receive a 6-digit reset code at your registered email.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {forgotError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start space-x-2 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{forgotError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSendResetCode} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Index Number
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={forgotIndex}
+                    onChange={(e) => setForgotIndex(e.target.value.toUpperCase())}
+                    placeholder="e.g. 250373T"
+                    className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 uppercase font-mono font-semibold transition"
+                    autoFocus
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowForgotModal(false)}
+                  className="flex-1 py-3 px-4 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={forgotLoading}
+                  className="flex-1 py-3 px-4 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-md shadow-sky-600/30 flex items-center justify-center space-x-1.5 transition disabled:opacity-60"
+                >
+                  {forgotLoading ? (
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <span>Send Code</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

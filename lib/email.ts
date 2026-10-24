@@ -126,6 +126,62 @@ export async function sendVerificationOtpEmail(
 }
 
 /**
+ * Dispatch Password Reset 6-digit OTP email
+ */
+export async function sendPasswordResetOtpEmail(
+  toEmail: string,
+  studentName: string,
+  indexNo: string,
+  otpCode: string
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  console.log(`\n======================================================`);
+  console.log(`🔐 [RESET OTP DISPATCH] Password Reset Code for ${toEmail}:`);
+  console.log(`👤 Student: ${studentName} (${indexNo})`);
+  console.log(`🔑 RESET CODE: >>> ${otpCode} <<<`);
+  console.log(`======================================================\n`);
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 20px; background-color: #ffffff;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <div style="display: inline-block; width: 48px; height: 48px; line-height: 48px; border-radius: 16px; background-color: #0284c7; color: #ffffff; font-size: 24px;">
+          🔐
+        </div>
+        <h2 style="color: #0f172a; margin-top: 12px; margin-bottom: 4px; font-weight: 800;">Password Reset Request</h2>
+        <p style="color: #64748b; font-size: 13px; margin: 0;">Project ASTRIX &bull; Smart Umbrella Station</p>
+      </div>
+
+      <p style="color: #334155; font-size: 15px; line-height: 1.6;">
+        Hello <strong>${studentName}</strong>,
+      </p>
+      <p style="color: #475569; font-size: 14px; line-height: 1.6;">
+        A request was made to reset the password for University Index Number <strong style="font-family: monospace;">${indexNo}</strong>. Use the 6-digit code below to set a new password:
+      </p>
+
+      <div style="margin: 28px 0; text-align: center;">
+        <div style="display: inline-block; font-family: monospace; font-size: 34px; font-weight: 900; letter-spacing: 8px; color: #0284c7; background-color: #f0f9ff; padding: 14px 28px; border-radius: 14px; border: 2px dashed #bae6fd;">
+          ${otpCode}
+        </div>
+      </div>
+
+      <p style="color: #64748b; font-size: 13px; line-height: 1.5;">
+        ⏰ This reset code is valid for <strong>15 minutes</strong>. If you did not request a password reset, your account is still secure and you can safely ignore this email.
+      </p>
+
+      <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
+      <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+        Project ASTRIX &bull; University of Moratuwa
+      </p>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: toEmail,
+    subject: `🔐 Your ASTRIX Password Reset Code: ${otpCode}`,
+    html,
+  });
+}
+
+/**
  * Dispatch Borrow confirmation receipt
  */
 export async function sendBorrowReceiptEmail(

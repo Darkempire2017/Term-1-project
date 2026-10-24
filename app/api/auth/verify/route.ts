@@ -84,6 +84,14 @@ export async function POST(request: Request) {
         );
       }
 
+      // Check code expiration (15 minutes)
+      if (user.verification_expires && new Date(user.verification_expires).getTime() < Date.now()) {
+        return NextResponse.json(
+          { success: false, message: 'Verification code has expired. Please request a new reset code.' },
+          { status: 400 }
+        );
+      }
+
       studentData = {
         index_no: user.index_no,
         username: user.username,
@@ -91,8 +99,9 @@ export async function POST(request: Request) {
       };
     }
 
-    // 3. Hash password and insert the verified student account in Supabase
+    // 3. Hash password and insert/update the verified student account in Supabase
     const hashedPassword = hashPassword(newPassword);
+    const isSignup = Boolean(verification_token);
 
     const { error: upsertError } = await supabaseAdmin
       .from('users')
@@ -115,22 +124,27 @@ export async function POST(request: Request) {
       );
     }
 
-    // 4. Send Welcome & Account Activation confirmation email in background
-    (async () => {
-      try {
-        await sendWelcomeSignupEmail(
-          studentData.email,
-          studentData.username,
-          studentData.index_no
-        );
-      } catch (emailErr: any) {
-        console.warn('⚠️ [API/Auth/Verify] Welcome email warning:', emailErr?.message);
-      }
-    })();
+    // 4. Send Welcome & Account Activation confirmation email on signup only
+    if (isSignup) {
+      (async () => {
+        try {
+          await sendWelcomeSignupEmail(
+            studentData.email,
+            studentData.username,
+            studentData.index_no
+          );
+        } catch (emailErr: any) {
+          console.warn('⚠️ [API/Auth/Verify] Welcome email warning:', emailErr?.message);
+        }
+      })();
+    }
 
     return NextResponse.json({
       success: true,
-      message: 'Account verified successfully and password set.',
+      message: isSignup 
+        ? 'Account verified successfully and password set.' 
+        : 'Password reset successfully! You can now sign in with your new password.',
+      is_reset: !isSignup,
       user: {
         index_no: studentData.index_no,
         username: studentData.username,

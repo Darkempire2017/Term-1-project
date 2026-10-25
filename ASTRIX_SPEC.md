@@ -1,6 +1,6 @@
 # ASTRIX Master Specification & Progress Tracker
 **Project:** IoT Smart Umbrella Borrowing System (University of Moratuwa)  
-**Last Updated:** 2026-10-21
+**Last Updated:** 2026-10-25
 
 ---
 
@@ -9,8 +9,8 @@
 - [x] **Step 1: Foundation & Environment Setup**
   - [x] Archive legacy `/frontend` and `/backend` into `/_legacy_archive/`
   - [x] Initialize Next.js (App Router), Tailwind CSS, and TypeScript in root
-  - [x] Configure `.env.local` with Supabase, HiveMQ, Resend, and Gemini keys
-  - [x] Create `lib/types.ts` and `lib/supabase.ts` (browser + admin client)
+  - [x] Configure `.env.local` from `.env.example` (Supabase, AUTH_SECRET, HiveMQ, email)
+  - [x] Create `lib/types.ts` and `lib/supabase.ts` (server-only admin client)
   - [x] Verify clean compilation (`npm run dev` / `npm run build`)
 - [x] **Step 2: Mobile Shell & Navigation**
   - [x] Build `app/layout.tsx` with mobile phone container (`max-w-md mx-auto min-h-screen bg-white shadow-2xl relative flex flex-col`)
@@ -44,16 +44,26 @@
   - [x] Bottom Navigation integration
 - [x] **Step 7: Full API Routes, MQTT Worker, Simulator & Emails**
   - [x] `/api/auth/*` (Sign up, OTP verification, Login)
-  - [x] `/api/borrow` and `/api/return` with MQTT publish & simulation fallback
-  - [x] Background worker `worker/mqtt-listener.ts` listening to `astrix/uom/kiosk-01/#`
+  - [x] `/api/borrow` and `/api/return` send the cabinet command, wait for the cabinet response, then record the result
+  - [x] Read-only cabinet monitor `worker/mqtt-listener.ts` (no database writes)
   - [x] Gmail SMTP real email dispatch pipeline (`teamastrixhq@gmail.com`) for OTP, rental confirmation, and return receipt
-  - [x] Update `/firmware/mock_esp32.js` for `astrix/uom/kiosk-01/*` topics
+  - [x] `/firmware/mock_esp32.js` simulator on `astrix-umbrella/cabinet/*` topics
+- [x] **Step 8: Security & Hardware Audit Fixes (2026-10-25)**
+  - [x] Secrets only from environment variables; no fallback keys in source
+  - [x] Signed httpOnly session cookie; API routes ignore `index_no` in request bodies
+  - [x] All database access moved to API routes (`/api/me`); RLS on with no anon policies
+  - [x] Signup token stores a keyed hash of the code; signup can't overwrite a verified account
+  - [x] Rate limits on login, signup, verify and forgot-password
+  - [x] Removed unauthenticated `/api/*/complete` and `/api/event/removed` routes
+  - [x] Real umbrella tag UIDs; working ESP32-S3 firmware in `firmware/`
+  - [ ] Move to a private MQTT broker with per-client publish rules
+  - [ ] Back the rate limiter with a shared store (Upstash / Vercel KV)
 
 ---
 
 ## 🗄️ Database Schema & Live State
 
-### Live Database: `https://ylmjqunzvhwzgyvlgauu.supabase.co`
+### Live Database: Supabase (URL and keys in environment variables only)
 
 ### 1. `users` Table
 | Column | Type | Constraints / Description |
@@ -71,10 +81,10 @@
 ### 2. `umbrellas` Table (Pre-Seeded)
 | Slot | Umbrella ID | Availability | Borrowed User |
 | :--- | :--- | :--- | :--- |
-| **1** | `04A1B2C3D4` | `true` | `null` |
-| **2** | `04B2C3D4E5` | `true` | `null` |
-| **3** | `04C3D4E5F6` | `true` | `null` |
-| **4** | `04D4E5F6A7` | `true` | `null` |
+| **1** | `53 01 B8 CC 33 00 01` | `true` | `null` |
+| **2** | `53 07 B8 CC 33 00 01` | `true` | `null` |
+| **3** | `53 08 B8 CC 33 00 01` | `true` | `null` |
+| **4** | `53 09 B8 CC 33 00 01` | `true` | `null` |
 
 ### 3. `borrow_records` Table
 | Column | Type | Constraints / Description |
@@ -94,7 +104,7 @@
 
 * **Broker:** `broker.hivemq.com` (QoS 0)
   * **ESP32 / Microcontroller (TCP):** Port `1883` (`mqtt://broker.hivemq.com:1883`)
-  * **Web & Serverless / Vercel (WebSockets SSL):** Port `8884` (`wss://broker.hivemq.com:8884/mqtt` with 200ms socket flush delay and automatic retry)
+  * **Web & Serverless / Vercel (WebSockets SSL):** Port `8884` (`wss://broker.hivemq.com:8884/mqtt`). API routes subscribe to the response topic, publish the command, and wait up to 45 s for the matching response
 * **Command Topic (Server ➔ ESP32):** `astrix-umbrella/cabinet/command`
   * Borrow Command: `{"action": "BORROW", "slot": 1}`
   * Return Command: `{"action": "RETURN", "slot": 1}`
@@ -108,8 +118,9 @@
 ---
 
 ## 🛠️ Developer & Hardware Testing Mode (`DEV001`)
+* **Access:** developer accounts are listed in the `DEV_INDEXES` environment variable and must sign in with their own password. The server decides developer access from the session.
 * **Zero-Loan Hardware Testing Mode:** `DEV001` is designated as a pure hardware testing account. **No loans are ever created or recorded in `borrow_records`** for `DEV001`. The developer is never trapped in "State B (Active Loan)" and is free to test hardware repeatedly.
 * **Dual Actuation Buttons per Slot:** On the `DEV001` dashboard, each physical slot (1–4) features **two dedicated buttons**:
   * 🔓 **"Borrow"** button: Sends `{"action": "BORROW", "slot": X}` directly to HiveMQ.
   * 🔒 **"Return"** button: Sends `{"action": "RETURN", "slot": X}` directly to HiveMQ (no active loan required).
-* **Hardware-Verified Confirmation:** Return operations do not prematurely commit to the database. Loan closure and return confirmation are only committed upon verified Case 3 response from the ESP32 cabinet.
+* **Hardware-Verified Confirmation:** Loans are only created on a Case 1 response and only closed on a Case 3 response, by the API route that sent the command.

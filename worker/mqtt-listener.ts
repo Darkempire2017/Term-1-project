@@ -11,7 +11,7 @@
  */
 
 import mqtt from 'mqtt';
-import { MQTT_TOPIC_COMMAND, MQTT_TOPIC_RESPONSE, getBrokerOptions, getEffectiveBrokerUrl } from '../lib/mqtt';
+import { MQTT_TOPIC_COMMAND, MQTT_TOPIC_RESPONSE, MQTT_TOPIC_SLOTS, getBrokerOptions, getEffectiveBrokerUrl } from '../lib/mqtt';
 
 const brokerUrl = getEffectiveBrokerUrl();
 
@@ -26,18 +26,18 @@ const client = mqtt.connect(brokerUrl, {
 
 client.on('connect', () => {
   console.log('✅ [ASTRIX Monitor] Connected.');
-  client.subscribe([MQTT_TOPIC_COMMAND, MQTT_TOPIC_RESPONSE], (err) => {
+  client.subscribe([MQTT_TOPIC_COMMAND, MQTT_TOPIC_RESPONSE, MQTT_TOPIC_SLOTS], (err) => {
     if (err) {
       console.error('❌ [ASTRIX Monitor] Subscription error:', err.message);
     } else {
-      console.log(`📡 Watching ${MQTT_TOPIC_COMMAND} and ${MQTT_TOPIC_RESPONSE}`);
+      console.log(`📡 Watching ${MQTT_TOPIC_COMMAND}, ${MQTT_TOPIC_RESPONSE} and ${MQTT_TOPIC_SLOTS}`);
     }
   });
 });
 
 client.on('message', (topic, message) => {
   const time = new Date().toLocaleTimeString();
-  const arrow = topic === MQTT_TOPIC_COMMAND ? '📤 COMMAND ' : '📥 RESPONSE';
+  const arrow = topic === MQTT_TOPIC_COMMAND ? '📤 COMMAND ' : topic === MQTT_TOPIC_SLOTS ? '🗂️ SLOTS   ' : '📥 RESPONSE';
   console.log(`[${time}] ${arrow} ${message.toString()}`);
 });
 

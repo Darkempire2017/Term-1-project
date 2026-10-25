@@ -18,6 +18,7 @@
  * MQTT:
  *   - Subscribe: astrix-umbrella/cabinet/command   {"action":"BORROW"|"RETURN","slot":1-4}
  *   - Publish:   astrix-umbrella/cabinet/response  (5 standard responses, QoS 0)
+ *   - Publish:   astrix-umbrella/cabinet/slots     (retained: what is in each slot, so the website can sync)
  *
  * Libraries: PubSubClient (Nick O'Leary), ArduinoJson 7, MFRC522 (GithubCommunity)
  *
@@ -51,6 +52,7 @@ const char* MQTT_PASS      = "";
 const char* MQTT_CLIENT_ID = "astrix-umbrella-esp32"; // must be unique on the broker
 const char* COMMAND_TOPIC  = "astrix-umbrella/cabinet/command";  // HiveMQ -> ESP32
 const char* RESPONSE_TOPIC = "astrix-umbrella/cabinet/response"; // ESP32 -> HiveMQ
+const char* SLOTS_TOPIC    = "astrix-umbrella/cabinet/slots";    // ESP32 -> HiveMQ: what is in each slot (retained)
 
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
@@ -130,9 +132,30 @@ struct SlotJob {
   unsigned long windowStart = 0; // start of the current button window or tag read
   bool stayed = true;            // button stayed in the required state this window
   bool wrongUmbrella = false;    // last check found a wrong umbrella (returns only)
+  int lastFound = -1;            // last tag result (umbrella 0-3, NO_TAG or UNKNOWN_TAG)
 };
 
 SlotJob jobs[NUM_SLOTS];
+
+// What is physically in each slot. Reported (retained) on SLOTS_TOPIC so the website
+// can keep its database in step, e.g. after a return done at the cabinet with r1.
+struct SlotState {
+  bool docked = false;  // button pressed
+  int umbrella = -1;    // umbrella 0-3 on the reader, NO_TAG or UNKNOWN_TAG
+};
+
+SlotState seen[NUM_SLOTS];
+int lastButton[NUM_SLOTS];
+unsigned long buttonChangedAt[NUM_SLOTS];
+int tagCandidate[NUM_SLOTS];
+int tagCandidateCount[NUM_SLOTS];
+int nextTagSlot = 0;
+unsigned long lastTagPoll = 0;
+unsigned long lastSlotsPublish = 0;
+
+const unsigned long buttonSettleTime = 500;   // button must be steady this long to count
+const unsigned long tagPollInterval  = 750;   // read one idle slot's tag every 0.75 s (each slot every ~3 s)
+const unsigned long slotsRefresh     = 60000; // resend the slot state at least once a minute
 
 // Command received over MQTT, run from loop() rather than inside the callback
 String pendingCommand = "";
@@ -176,6 +199,13 @@ void updateServos() {
 
 bool servoArrived(int i) {
   return currentPosition[i] == targetPosition[i];
+}
+
+bool anyServoMoving() {
+  for (int i = 0; i < NUM_SLOTS; i++) {
+    if (!servoArrived(i)) return true;
+  }
+  return false;
 }
 
 // ===================== RFID =====================
@@ -259,7 +289,6 @@ void finishJob(int slot, bool success) {
   }
 
   Serial.println(msg);
-  publishResult(job.isBorrow ? "BORROW" : "RETURN", slot + 1, res);
 
   if (keepOpen) {
     job.phase = SLOT_IDLE;
@@ -267,6 +296,21 @@ void finishJob(int slot, bool success) {
     targetPosition[slot] = LOCK_CLOSED;
     job.phase = SLOT_LOCKING;
   }
+
+  // Update what is in the slot from the outcome, and report it BEFORE the result,
+  // so the website never sees an old "umbrella is here" after it records a borrow
+  if (job.isBorrow) {
+    setSlotState(slot, !success, success ? NO_TAG : slot);
+  } else if (success) {
+    setSlotState(slot, true, slot);
+  } else if (job.wrongUmbrella) {
+    setSlotState(slot, true, job.lastFound);
+  } else {
+    setSlotState(slot, false, NO_TAG);
+  }
+  publishSlots();
+
+  publishResult(job.isBorrow ? "BORROW" : "RETURN", slot + 1, res);
 }
 
 void nextCheck(int slot) {
@@ -282,6 +326,7 @@ void nextCheck(int slot) {
 // Called with the tag result once a check's button window has passed
 void evaluateTag(int slot, int found) {
   SlotJob &job = jobs[slot];
+  job.lastFound = found;
 
   if (job.isBorrow) {
     if (found < 0) {
@@ -354,9 +399,95 @@ void updateJob(int slot) {
       if (servoArrived(slot)) {
         job.phase = SLOT_IDLE;
         Serial.printf("Slot %d locked.\n", slot + 1);
+        publishSlots(); // slot is no longer busy
       }
       return;
   }
+}
+
+// ===================== Slot state (for website sync) =====================
+
+// Set what is in a slot and restart its debounce from that value
+void setSlotState(int slot, bool docked, int umbrella) {
+  seen[slot].docked = docked;
+  seen[slot].umbrella = umbrella;
+  lastButton[slot] = digitalRead(BUTTON_PINS[slot]);
+  buttonChangedAt[slot] = millis();
+  tagCandidate[slot] = umbrella;
+  tagCandidateCount[slot] = 2;
+}
+
+// Publishes {"slots":[{"slot":1,"busy":false,"docked":true,"umbrella":1},...]} as a retained message.
+// umbrella is the umbrella number on the reader (1-4), 0 for an unknown tag, or null for no tag.
+void publishSlots() {
+  if (!mqtt.connected()) return; // sent again on the next change or refresh
+
+  char payload[320];
+  int n = snprintf(payload, sizeof(payload), "{\"slots\":[");
+  for (int s = 0; s < NUM_SLOTS; s++) {
+    char umbrella[8];
+    if (seen[s].umbrella >= 0) snprintf(umbrella, sizeof(umbrella), "%d", seen[s].umbrella + 1);
+    else if (seen[s].umbrella == UNKNOWN_TAG) snprintf(umbrella, sizeof(umbrella), "0");
+    else snprintf(umbrella, sizeof(umbrella), "null");
+
+    n += snprintf(payload + n, sizeof(payload) - n, "%s{\"slot\":%d,\"busy\":%s,\"docked\":%s,\"umbrella\":%s}",
+                  s > 0 ? "," : "", s + 1,
+                  jobs[s].phase != SLOT_IDLE ? "true" : "false",
+                  seen[s].docked ? "true" : "false",
+                  umbrella);
+  }
+  snprintf(payload + n, sizeof(payload) - n, "]}");
+
+  if (mqtt.publish(SLOTS_TOPIC, payload, true)) {
+    lastSlotsPublish = millis();
+    Serial.printf("Slot state sent: %s\n", payload);
+  }
+}
+
+// Watches the button and tag of every idle slot, and reports changes.
+// Catches umbrellas taken or put back outside the website (Serial b1/r1, or by hand).
+void watchIdleSlots() {
+  unsigned long now = millis();
+  bool changed = false;
+
+  for (int s = 0; s < NUM_SLOTS; s++) {
+    if (jobs[s].phase != SLOT_IDLE) continue;
+    int button = digitalRead(BUTTON_PINS[s]);
+    if (button != lastButton[s]) {
+      lastButton[s] = button;
+      buttonChangedAt[s] = now;
+    } else if (now - buttonChangedAt[s] >= buttonSettleTime) {
+      bool docked = (button == LOW);
+      if (docked != seen[s].docked) {
+        seen[s].docked = docked;
+        changed = true;
+      }
+    }
+  }
+
+  // Read one idle slot's tag at a time, and not while a lock is moving (keeps the motors smooth)
+  if (now - lastTagPoll >= tagPollInterval && !anyServoMoving()) {
+    lastTagPoll = now;
+    int s = nextTagSlot;
+    nextTagSlot = (nextTagSlot + 1) % NUM_SLOTS;
+    if (jobs[s].phase == SLOT_IDLE) {
+      String tagUID;
+      int found = tryReadCard(readers[s], tagUID) ? umbrellaIndex(tagUID) : NO_TAG;
+      // One missed read is normal, so only believe the same result twice in a row
+      if (found == tagCandidate[s]) {
+        tagCandidateCount[s]++;
+      } else {
+        tagCandidate[s] = found;
+        tagCandidateCount[s] = 1;
+      }
+      if (tagCandidateCount[s] >= 2 && found != seen[s].umbrella) {
+        seen[s].umbrella = found;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed || now - lastSlotsPublish >= slotsRefresh) publishSlots();
 }
 
 // Start a borrow/return on one slot; other slots keep running
@@ -404,6 +535,7 @@ void connectMqtt() {
     Serial.println("connected.");
     mqtt.subscribe(COMMAND_TOPIC);
     Serial.printf("Subscribed to %s\n", COMMAND_TOPIC);
+    publishSlots(); // refresh the retained slot state after (re)connecting
   } else {
     Serial.printf("failed (state %d). Retrying in 5 seconds.\n", mqtt.state());
   }
@@ -502,6 +634,14 @@ void setup() {
 
     // Configure switch pin to use internal pull-up resistor
     pinMode(BUTTON_PINS[i], INPUT_PULLUP);
+
+    // Start the slot watcher from the button; the tag is read within a few seconds
+    lastButton[i] = digitalRead(BUTTON_PINS[i]);
+    buttonChangedAt[i] = millis();
+    seen[i].docked = (lastButton[i] == LOW);
+    seen[i].umbrella = NO_TAG;
+    tagCandidate[i] = NO_TAG;
+    tagCandidateCount[i] = 0;
   }
 
   // Deselect every reader before using SPI, so they don't talk over each other
@@ -566,4 +706,7 @@ void loop() {
     updateJob(s);
   }
   updateServos();
+
+  // Report what is in each idle slot so the website stays in step
+  watchIdleSlots();
 }

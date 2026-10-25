@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { getSessionIndex, SESSION_COOKIE, sessionCookieOptions } from '@/lib/session';
 import { isDevIndex } from '@/lib/dev';
 import { findOpenLoan } from '@/lib/loans';
+import { syncCabinetSlots } from '@/lib/cabinet-sync';
 import type { MeResponse, PublicSlot } from '@/lib/types';
 
 /**
@@ -15,6 +16,12 @@ export async function GET() {
     if (!indexNo) {
       return NextResponse.json({ success: false, message: 'Please sign in.' }, { status: 401 });
     }
+
+    // After answering, bring the database in step with what is physically in the
+    // cabinet (e.g. an umbrella returned at the cabinet with r1). Throttled to one
+    // sync every 15 s per server instance; dashboards poll every 5 s, so changes
+    // show up on the next refresh.
+    after(() => syncCabinetSlots());
 
     const { data: user, error: userError } = await supabaseAdmin
       .from('users')

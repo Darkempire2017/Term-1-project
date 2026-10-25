@@ -5,7 +5,6 @@ import { sendReturnReceiptEmail } from '@/lib/email';
 import { getSessionIndex } from '@/lib/session';
 import { isDevIndex } from '@/lib/dev';
 import { findOpenLoan, formatLoanDuration } from '@/lib/loans';
-import { rateLimit } from '@/lib/rate-limit';
 
 // The cabinet takes up to ~20 s to report the result, so allow the route to wait
 export const maxDuration = 60;
@@ -21,13 +20,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, message: 'Please sign in to return an umbrella.' }, { status: 401 });
     }
 
-    if (!rateLimit(`return:${indexNo}`, 5, 10 * 60 * 1000)) {
-      return NextResponse.json(
-        { success: false, message: 'Too many return attempts. Please wait a few minutes.' },
-        { status: 429 }
-      );
-    }
-
+    // No attempt limit on returns: a student at the cabinet must always be able to
+    // retry, and a return only ever opens the slot that belongs to their own umbrella
     const body = await request.json().catch(() => ({}));
 
     // ------------------------------------------------------------------

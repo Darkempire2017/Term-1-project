@@ -4,7 +4,6 @@ import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Umbrella, Lock, User, ArrowRight, Eye, EyeOff, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 import { useViewMode } from '@/components/ViewModeContext';
 
 function LoginForm() {
@@ -42,7 +41,7 @@ function LoginForm() {
 
     const notice = searchParams.get('notice');
     if (notice === 'session_expired') {
-      setError('Your session has ended because this account was removed from the system. Please register or sign in again.');
+      setError('Your session has ended. Please sign in again.');
     }
   }, [searchParams]);
 
@@ -118,13 +117,9 @@ function LoginForm() {
         return;
       }
 
-      const activeUser = json.user || {
-        index_no: cleanIndex,
-        username: cleanIndex === '210042A' ? 'K. A. Nimal Perera' : `Student ${cleanIndex}`,
-        email: `${cleanIndex.toLowerCase()}@uom.lk`,
-      };
+      const activeUser = json.user;
 
-      // Store user in local storage session
+      // The server set a signed session cookie; this copy is only for showing the name
       localStorage.setItem('astrix_user', JSON.stringify(activeUser));
 
       setSuccess(`Welcome back, ${activeUser.username}!`);
@@ -138,9 +133,9 @@ function LoginForm() {
     }
   };
 
+  // Fills only the developer index number — the password is never stored in code
   const fillDemoStudent = () => {
     setIndexNo('DEV001');
-    setPassword('password123');
     setError(null);
   };
 
@@ -155,7 +150,7 @@ function LoginForm() {
               onClick={fillDemoStudent}
               className="text-[11px] text-sky-600 hover:text-sky-700 font-bold bg-sky-50 hover:bg-sky-100/80 px-2.5 py-1 rounded-lg transition"
             >
-              Auto-fill Dev (DEV001)
+              Fill dev index (DEV001)
             </button>
           )}
         </div>

@@ -1,28 +1,23 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import mqtt from 'mqtt';
 import {
   Umbrella,
   Lock,
   Unlock,
   CheckCircle2,
   Clock,
-  AlertCircle,
   RefreshCw,
-  ArrowRight,
-  ShieldCheck,
   Check,
-  ChevronRight,
-  Info,
   Wrench,
 } from 'lucide-react';
 import { BottomNav } from '@/components/BottomNav';
-import { supabase } from '@/lib/supabase';
-import { Umbrella as UmbrellaSlotType, BorrowRecord } from '@/lib/types';
+import type { MeResponse, PublicSlot } from '@/lib/types';
 import { useViewMode } from '@/components/ViewModeContext';
+
+// Seconds the cabinet gives the student to take the umbrella (5 checks × ~2.5 s)
+const TAKE_WINDOW_SECONDS = 13;
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -30,213 +25,83 @@ export default function DashboardPage() {
   const [currentUserIndex, setCurrentUserIndex] = useState('');
   const [currentUserName, setCurrentUserName] = useState('');
 
-  // Identify developer account
-  const isDevAccount = currentUserIndex === 'DEV001';
+  // Developer (hardware testing) access is decided by the server
+  const [isDevAccount, setIsDevAccount] = useState(false);
 
-  // Supabase slot states
-  const [slots, setSlots] = useState<UmbrellaSlotType[]>([
-    { slot: 1, umbrella_id: '04A1B2C3D4', availability: true, borrowed_user: null },
-    { slot: 2, umbrella_id: '04B2C3D4E5', availability: true, borrowed_user: null },
-    { slot: 3, umbrella_id: '04C3D4E5F6', availability: true, borrowed_user: null },
-    { slot: 4, umbrella_id: '04D4E5F6A7', availability: true, borrowed_user: null },
-  ]);
+  // Slot states from the server (no placeholder tag IDs)
+  const [slots, setSlots] = useState<PublicSlot[]>([]);
 
   // Active borrow state (Determines State A vs State B)
   const [activeLoan, setActiveLoan] = useState<{
     record_id?: string;
     umbrella_id: string;
-    slot: number;
+    slot: number | null;
     borrowed_time: string;
+    is_overdue?: boolean;
   } | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<'borrow' | 'return' | null>(null);
   const [unlockCountdown, setUnlockCountdown] = useState<number | null>(null);
+  const [pendingSlot, setPendingSlot] = useState<number | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [notification, setNotification] = useState<{
     type: 'success' | 'info' | 'error';
     text: string;
   } | null>(null);
 
-  // Read student session on mount
+  // Show the cached name instantly while the server confirms the session
   useEffect(() => {
     try {
       const raw = localStorage.getItem('astrix_user');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed.index_no && parsed.index_no.length >= 3) {
-          setCurrentUserIndex(parsed.index_no.toUpperCase());
-          setCurrentUserName(parsed.username || 'Student');
-          return;
-        }
+        setCurrentUserIndex((parsed.index_no || '').toUpperCase());
+        setCurrentUserName(parsed.username || 'Student');
       }
-      // No active session — redirect to login
-      router.replace('/login');
-    } catch (e) {
-      router.replace('/login');
-    }
-  }, [router]);
+    } catch {}
+  }, []);
 
-  // Fetch slots, active loan, and verify active user exists in Supabase
-  const refreshStationData = async () => {
-    if (!currentUserIndex) return;
-
+  // Fetch profile, slots and active loan from the server (session cookie)
+  const refreshStationData = useCallback(async () => {
     try {
-      // 0. Verify that the student still exists and is verified in Supabase
-      const { data: dbUser, error: userErr } = await supabase
-        .from('users')
-        .select('index_no, is_verified')
-        .eq('index_no', currentUserIndex)
-        .maybeSingle();
+      const res = await fetch('/api/me', { cache: 'no-store' });
 
-      if (!dbUser || !dbUser.is_verified) {
-        console.warn(`⚠️ Account ${currentUserIndex} no longer exists in database. Auto-logging out...`);
+      if (res.status === 401) {
         localStorage.removeItem('astrix_user');
         sessionStorage.clear();
         router.replace('/login?notice=session_expired');
         return;
       }
 
-      // 1. Fetch slots 1-4 from Supabase umbrellas table
-      const { data: dbSlots, error: slotsErr } = await supabase
-        .from('umbrellas')
-        .select('*')
-        .order('slot', { ascending: true });
+      const json: MeResponse = await res.json();
+      if (!res.ok || !json.success) return;
 
-      if (!slotsErr && dbSlots && dbSlots.length > 0) {
-        setSlots(dbSlots as UmbrellaSlotType[]);
-      }
-
-      // 2. Fetch active loan for this student (DEV001 is a pure hardware test account — no loans tracked)
-      if (currentUserIndex !== 'DEV001') {
-        const { data: activeBorrow, error: borrowErr } = await supabase
-          .from('borrow_records')
-          .select('*')
-          .eq('index_no', currentUserIndex)
-          .eq('status', 'ACTIVE')
-          .maybeSingle();
-
-        if (!borrowErr && activeBorrow) {
-          // Find which slot holds or was associated with this umbrella
-          const matchedSlot = dbSlots?.find((s) => s.umbrella_id === activeBorrow.umbrella_id)?.slot || 1;
-          setActiveLoan({
-            record_id: activeBorrow.record_id,
-            umbrella_id: activeBorrow.umbrella_id,
-            slot: matchedSlot,
-            borrowed_time: activeBorrow.borrowed_time,
-          });
-        } else {
-          setActiveLoan(null);
-        }
-      } else {
-        setActiveLoan(null);
-      }
+      setCurrentUserIndex(json.user.index_no);
+      setCurrentUserName(json.user.username || 'Student');
+      setIsDevAccount(json.is_dev);
+      setSlots(json.slots);
+      setActiveLoan(json.active_loan);
     } catch (err: any) {
-      console.warn('Supabase fetch note:', err.message);
+      console.warn('Station refresh note:', err.message);
     } finally {
       setLoading(false);
     }
+  }, [router]);
+
+  useEffect(() => {
+    refreshStationData();
+    const interval = setInterval(refreshStationData, 5000);
+    return () => clearInterval(interval);
+  }, [refreshStationData]);
+
+  const stopCountdown = () => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    countdownRef.current = null;
+    setUnlockCountdown(null);
   };
 
-  useEffect(() => {
-    if (currentUserIndex) {
-      refreshStationData();
-      const interval = setInterval(refreshStationData, 3500);
-      return () => clearInterval(interval);
-    }
-  }, [currentUserIndex]);
-
-  // Live Browser MQTT WebSocket Connection for real-time cabinet event detection
-  useEffect(() => {
-    if (!currentUserIndex) return;
-
-    let client: mqtt.MqttClient | null = null;
-    try {
-      client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
-        clientId: `astrix-web-ui-${Math.random().toString(16).substring(2, 8)}`,
-        clean: true,
-        connectTimeout: 8000,
-      });
-
-      client.on('connect', () => {
-        client?.subscribe('astrix-umbrella/cabinet/response');
-        console.log('📡 [Browser MQTT] Subscribed to cabinet responses.');
-      });
-
-      client.on('message', async (_topic, message) => {
-        try {
-          const data = JSON.parse(message.toString());
-          console.log('📡 [Cabinet Response Received]:', data);
-
-          const { action, slot, status, reason, message: msg } = data;
-
-          if (action === 'RETURN') {
-            if (status === 'SUCCESS') {
-              setNotification({
-                type: 'success',
-                text: `↩️ ${msg || `Umbrella returned to Slot #${slot}! Lock engaged and return confirmed.`}`,
-              });
-              setActionInProgress(null);
-              // Complete return in database & dispatch receipt email
-              await fetch('/api/return/complete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ slot, index_no: currentUserIndex }),
-              });
-              refreshStationData();
-            } else if (status === 'FAIL') {
-              setActionInProgress(null);
-              if (reason === 'WRONG_UMBRELLA') {
-                setNotification({
-                  type: 'error',
-                  text: `❌ Wrong umbrella in Slot #${slot}! Slot is left unlocked — please remove it and return the correct umbrella.`,
-                });
-              } else {
-                setNotification({
-                  type: 'error',
-                  text: `⚠️ ${msg || `No umbrella detected in Slot #${slot} after 5 checks. Lock closed.`}`,
-                });
-              }
-              refreshStationData();
-            }
-          } else if (action === 'BORROW') {
-            if (status === 'SUCCESS') {
-              setNotification({
-                type: 'success',
-                text: `✅ ${msg || `Umbrella taken from Slot #${slot}! Lock closed. Active loan started.`}`,
-              });
-              setUnlockCountdown(null);
-              setActionInProgress(null);
-              // Complete borrow in database & dispatch receipt email
-              await fetch('/api/borrow/complete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ slot, index_no: currentUserIndex }),
-              });
-              refreshStationData();
-            } else if (status === 'FAIL') {
-              setNotification({
-                type: 'error',
-                text: `⚠️ ${msg || `Umbrella was NOT taken from Slot #${slot}. Lock closed.`}`,
-              });
-              setUnlockCountdown(null);
-              setActionInProgress(null);
-              refreshStationData();
-            }
-          }
-        } catch (e) {
-          console.warn('MQTT parse error:', e);
-        }
-      });
-    } catch (err) {
-      console.warn('Browser MQTT connection warning:', err);
-    }
-
-    return () => {
-      try {
-        client?.end(true);
-      } catch {}
-    };
-  }, [currentUserIndex]);
+  useEffect(() => stopCountdown, []);
 
   // Next available slot calculation (lowest slot where availability = true)
   const availableSlotsList = slots.filter((s) => s.availability);
@@ -254,159 +119,83 @@ export default function DashboardPage() {
     return `${hours}h ${remMins}m ago`;
   };
 
-  // Borrow Umbrella (Supports direct slot selection for DEV001)
-  const handleBorrow = async (requestedSlot?: number) => {
-    let targetSlot: number;
+  // Shared request runner: the server sends the command, waits for the cabinet,
+  // records the result, and answers with the cabinet's message
+  const runCabinetAction = async (
+    kind: 'borrow' | 'return',
+    slotHint: number | null,
+    body: Record<string, unknown>
+  ) => {
+    setActionInProgress(kind);
+    setPendingSlot(slotHint);
+    setNotification({
+      type: 'info',
+      text:
+        kind === 'borrow'
+          ? `🔓 Opening ${slotHint ? `Slot #${slotHint}` : 'the next free slot'}… Take the umbrella when the lock opens.`
+          : `🔓 Opening ${slotHint ? `Slot #${slotHint}` : 'your slot'}… Put the umbrella back in when the lock opens.`,
+    });
 
-    if (isDevAccount && typeof requestedSlot === 'number') {
-      targetSlot = requestedSlot;
-    } else {
-      if (!nextAvailableSlot) {
-        setNotification({ type: 'error', text: 'No umbrellas currently available at this station.' });
-        return;
-      }
-      targetSlot = nextAvailableSlot.slot;
-    }
-
-    setActionInProgress('borrow');
-    setNotification(null);
-
-    try {
-      // 1. Send unlock command to server
-      const res = await fetch('/api/borrow', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ index_no: currentUserIndex, slot: targetSlot }),
-      });
-
-      const json = await res.json();
-
-      if (!res.ok || !json.success) {
-        setNotification({ type: 'error', text: json.message || 'Failed to unlock umbrella slot.' });
-        setActionInProgress(null);
-        return;
-      }
-
-      // 2. Start active countdown waiting for physical removal
-      setNotification({
-        type: 'info',
-        text: `🔓 Slot #${targetSlot} unlocked! Please pull the umbrella off the rack (waiting for cabinet confirmation)...`,
-      });
-
-      let remaining = 15;
+    if (kind === 'borrow') {
+      let remaining = TAKE_WINDOW_SECONDS;
       setUnlockCountdown(remaining);
-
-      const countdownTimer = setInterval(async () => {
+      countdownRef.current = setInterval(() => {
         remaining -= 1;
-        if (remaining > 0) {
-          setUnlockCountdown(remaining);
-        } else {
-          clearInterval(countdownTimer);
-          setUnlockCountdown(null);
-          setActionInProgress(null);
-          refreshStationData();
-        }
+        if (remaining > 0) setUnlockCountdown(remaining);
+        else stopCountdown();
       }, 1000);
-    } catch (err: any) {
-      console.warn('Borrow API note:', err);
-      setActionInProgress(null);
-      setUnlockCountdown(null);
-      setNotification({
-        type: 'error',
-        text: 'Could not connect to station. Please check connection.',
-      });
     }
-  };
-
-  // Return Umbrella (Only confirms once hardware verifies RFID and lock engages)
-  const handleReturn = async () => {
-    if (!activeLoan) return;
-
-    setActionInProgress('return');
-    setNotification({
-      type: 'info',
-      text: `🔓 Unlocking Slot #${activeLoan.slot} for return... Please wait.`,
-    });
 
     try {
-      const res = await fetch('/api/return', {
+      const res = await fetch(`/api/${kind}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ index_no: currentUserIndex, slot: activeLoan.slot }),
+        body: JSON.stringify(body),
       });
-
       const json = await res.json();
 
-      if (!res.ok || !json.success) {
-        setNotification({ type: 'error', text: json.message || 'Failed to unlock slot for return.' });
-        setActionInProgress(null);
-        return;
-      }
-
-      const returnedSlot = json.slot || activeLoan.slot;
-
-      // DO NOT mark return confirmed here! Wait for hardware response.
-      setNotification({
-        type: 'info',
-        text: `🔓 Slot #${returnedSlot} unlocked! Please insert your umbrella into Slot #${returnedSlot}. Waiting for lock verification...`,
-      });
-
-      // Safety timeout after 25s if hardware takes long
-      setTimeout(() => {
-        refreshStationData();
-      }, 25000);
-    } catch (err: any) {
-      console.warn('Return API error:', err);
-      setActionInProgress(null);
-      setNotification({
-        type: 'error',
-        text: 'Could not connect to station to initiate return.',
-      });
-    }
-  };
-
-  // DEV001 Direct Slot Return Command (Direct hardware actuation for any slot 1-4)
-  const handleDevReturn = async (slot: number) => {
-    setActionInProgress('return');
-    setNotification({
-      type: 'info',
-      text: `🔓 Sending RETURN command to Slot #${slot}... Please wait.`,
-    });
-
-    try {
-      const res = await fetch('/api/return', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ index_no: currentUserIndex, slot }),
-      });
-
-      const json = await res.json();
-
-      if (!res.ok || !json.success) {
+      if (res.ok && json.success) {
+        setNotification({ type: 'success', text: `✅ ${json.message}` });
+      } else if (json.reason === 'WRONG_UMBRELLA') {
         setNotification({
           type: 'error',
-          text: json.message || `Failed to unlock Slot #${slot} for return.`,
+          text: `❌ Wrong umbrella in Slot #${json.slot}. The slot is left unlocked — take it out and return your own umbrella.`,
         });
-        setActionInProgress(null);
-        return;
+      } else {
+        setNotification({ type: 'error', text: `⚠️ ${json.message || 'The request failed. Please try again.'}` });
       }
-
-      setNotification({
-        type: 'info',
-        text: `🔓 Slot #${slot} unlocked for return test! Insert umbrella into Slot #${slot}. Waiting for cabinet RFID response...`,
-      });
-
-      setTimeout(() => {
-        refreshStationData();
-      }, 20000);
-    } catch (err: any) {
-      console.warn('DEV Return API error:', err);
+    } catch {
+      setNotification({ type: 'error', text: 'Could not connect to the station. Please check your connection.' });
+    } finally {
+      stopCountdown();
+      setPendingSlot(null);
       setActionInProgress(null);
-      setNotification({
-        type: 'error',
-        text: `Could not connect to station for Slot #${slot}.`,
-      });
+      refreshStationData();
     }
+  };
+
+  // Borrow Umbrella (developer accounts can pick the slot)
+  const handleBorrow = async (requestedSlot?: number) => {
+    if (isDevAccount && typeof requestedSlot === 'number') {
+      await runCabinetAction('borrow', requestedSlot, { slot: requestedSlot });
+      return;
+    }
+    if (!nextAvailableSlot) {
+      setNotification({ type: 'error', text: 'No umbrellas currently available at this station.' });
+      return;
+    }
+    await runCabinetAction('borrow', nextAvailableSlot.slot, {});
+  };
+
+  // Return Umbrella (the server picks the slot from the loan)
+  const handleReturn = async () => {
+    if (!activeLoan) return;
+    await runCabinetAction('return', activeLoan.slot, {});
+  };
+
+  // Developer Direct Slot Return Command (any slot 1-4)
+  const handleDevReturn = async (slot: number) => {
+    await runCabinetAction('return', slot, { slot });
   };
 
   // Interactive Test State Switcher
@@ -418,9 +207,10 @@ export default function DashboardPage() {
     } else {
       // Switch to State B
       const slot1 = slots[0];
+      if (!slot1) return;
       setActiveLoan({
         umbrella_id: slot1.umbrella_id,
-        slot: 1,
+        slot: slot1.slot,
         borrowed_time: new Date(Date.now() - 24 * 60 * 1000).toISOString(), // 24 mins ago
       });
       setNotification({ type: 'info', text: 'Switched to State B (Returning View).' });
@@ -642,7 +432,7 @@ export default function DashboardPage() {
 
               <p className="text-xs text-sky-100/90 leading-relaxed">
                 {nextAvailableSlot
-                  ? `Umbrella tag (${nextAvailableSlot.umbrella_id}) is docked. Tap "Borrow" below to release the solenoid lock.`
+                  ? `Umbrella tag (${nextAvailableSlot.umbrella_id}) is docked. Tap "Borrow" below to open the lock.`
                   : 'All umbrellas are currently in use. Please check back soon.'}
               </p>
             </div>
@@ -703,7 +493,7 @@ export default function DashboardPage() {
                 </span>
                 <span className="text-xs text-amber-100 font-mono flex items-center space-x-1">
                   <Clock className="w-3.5 h-3.5" />
-                  <span>24h Due Window</span>
+                  <span>{activeLoan.is_overdue ? 'Overdue — please return' : '24h Due Window'}</span>
                 </span>
               </div>
 
@@ -724,7 +514,7 @@ export default function DashboardPage() {
               </div>
 
               <p className="text-xs text-amber-100/90 leading-relaxed">
-                You have an active umbrella loan. Return it to Slot #{activeLoan.slot} (or any empty slot) by tapping &quot;Return&quot; below.
+                You have an active umbrella loan. Return it to Slot #{activeLoan.slot ?? '?'} by tapping &quot;Return&quot; below. Each umbrella goes back to its own slot.
               </p>
             </div>
           </div>
@@ -751,7 +541,7 @@ export default function DashboardPage() {
               {unlockCountdown !== null ? (
                 <>
                   <Unlock className="w-5 h-5 animate-bounce" />
-                  <span>Slot #{nextAvailableSlot?.slot} Unlocked! Pull Umbrella ({unlockCountdown}s)</span>
+                  <span>Slot #{pendingSlot ?? nextAvailableSlot?.slot} opening — take the umbrella ({unlockCountdown}s)</span>
                 </>
               ) : actionInProgress === 'borrow' ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />

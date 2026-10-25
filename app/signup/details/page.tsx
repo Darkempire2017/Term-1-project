@@ -82,13 +82,8 @@ export default function SignUpDetailsPage() {
       // Navigate to /verify
       router.push(`/verify?index_no=${encodeURIComponent(cleanIndex)}&email=${encodeURIComponent(cleanEmail)}`);
     } catch (err: any) {
-      console.warn('Database note:', err.message);
-      // Fallback navigation
-      localStorage.setItem('astrix_pending_index', indexNo);
-      localStorage.setItem('astrix_pending_email', cleanEmail);
-      localStorage.setItem('astrix_pending_name', cleanName);
-      localStorage.setItem('astrix_demo_otp', '123456');
-      router.push(`/verify?index_no=${encodeURIComponent(indexNo)}&email=${encodeURIComponent(cleanEmail)}`);
+      console.warn('Signup request failed:', err.message);
+      setError('Could not reach the server. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }

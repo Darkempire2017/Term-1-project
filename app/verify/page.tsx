@@ -16,12 +16,10 @@ import {
   Mail,
   User,
 } from 'lucide-react';
-import { useViewMode } from '@/components/ViewModeContext';
 
 function VerifyForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isStudentMode } = useViewMode();
 
   const [isResetMode, setIsResetMode] = useState(false);
   const [indexNo, setIndexNo] = useState('');
@@ -36,7 +34,6 @@ function VerifyForm() {
   const [resending, setResending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [demoOtpHint, setDemoOtpHint] = useState<string | null>(null);
 
   // If user visits /verify directly with no index
   const [manualIndexInput, setManualIndexInput] = useState('');
@@ -62,11 +59,9 @@ function VerifyForm() {
       (reset ? sessionStorage.getItem('astrix_reset_email') : localStorage.getItem('astrix_pending_email')) ||
       '';
 
-    const storedOtp = localStorage.getItem('astrix_demo_otp') || '';
 
     setIndexNo(storedIndex);
     setEmail(storedEmail);
-    setDemoOtpHint(storedOtp);
 
     // Auto-focus first OTP input if index exists
     if (storedIndex) {
@@ -108,13 +103,6 @@ function VerifyForm() {
     if (e.key === 'Backspace' && !otpDigits[index] && index > 0) {
       inputRefs.current[index - 1]?.focus();
     }
-  };
-
-  const handleFillDemoOtp = () => {
-    const code = demoOtpHint || '123456';
-    setOtpDigits(code.slice(0, 6).split(''));
-    setNewPassword('password123');
-    setVerifyPassword('password123');
   };
 
   // Resend OTP code
@@ -294,15 +282,6 @@ function VerifyForm() {
             <span>Back to Sign In</span>
           </Link>
 
-          {!isStudentMode && demoOtpHint && (
-            <button
-              type="button"
-              onClick={handleFillDemoOtp}
-              className="text-[11px] text-sky-600 hover:text-sky-700 font-bold bg-sky-50 hover:bg-sky-100/80 px-2.5 py-1 rounded-lg transition"
-            >
-              Fill Code ({demoOtpHint})
-            </button>
-          )}
         </div>
 
         <div>

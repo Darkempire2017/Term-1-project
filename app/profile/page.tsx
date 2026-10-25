@@ -17,7 +17,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { BottomNav } from '@/components/BottomNav';
-import { supabase } from '@/lib/supabase';
+import type { MeResponse } from '@/lib/types';
 
 interface StudentProfile {
   index_no: string;
@@ -29,10 +29,9 @@ interface StudentProfile {
 export default function ProfilePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<StudentProfile>({
-    index_no: 'DEV001',
-    username: 'Developer Account',
-    email: 'dev@astrix.uom.lk',
-    is_verified: true,
+    index_no: '',
+    username: '',
+    email: '',
   });
 
   const [activeBorrow, setActiveBorrow] = useState<{
@@ -45,77 +44,53 @@ export default function ProfilePage() {
 
   useEffect(() => {
     const fetchUserData = async () => {
-      // 1. Try reading from active session in localStorage
-      let currentIndex = 'DEV001';
+      // Profile and loan come from the server, based on the session cookie
       try {
-        const raw = localStorage.getItem('astrix_user');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed.index_no) {
-            currentIndex = parsed.index_no;
-            setProfile((prev) => ({
-              ...prev,
-              index_no: parsed.index_no,
-              username: parsed.username || prev.username,
-              email: parsed.email || prev.email,
-            }));
-          }
-        }
-      } catch (e) {
-        console.warn('Session parse note:', e);
-      }
+        const res = await fetch('/api/me', { cache: 'no-store' });
 
-      // 2. Query Supabase for latest profile details
-      try {
-        const { data: dbUser } = await supabase
-          .from('users')
-          .select('*')
-          .eq('index_no', currentIndex)
-          .maybeSingle();
-
-        if (dbUser && dbUser.is_verified) {
-          setProfile({
-            index_no: dbUser.index_no,
-            username: dbUser.username,
-            email: dbUser.email,
-            is_verified: true,
-          });
-        } else {
-          // Account no longer exists in Supabase! Auto-logout immediately
-          console.warn(`⚠️ Profile user ${currentIndex} not found in database. Auto-logging out...`);
+        if (res.status === 401) {
+          // No session, or the account no longer exists: back to sign in
           localStorage.removeItem('astrix_user');
           sessionStorage.clear();
           router.replace('/login?notice=session_expired');
           return;
         }
 
-        // 3. Query active borrow record
-        const { data: borrow } = await supabase
-          .from('borrow_records')
-          .select('*')
-          .eq('index_no', currentIndex)
-          .eq('status', 'ACTIVE')
-          .maybeSingle();
+        const json: MeResponse = await res.json();
+        if (!res.ok || !json.success) return;
 
-        if (borrow) {
-          setActiveBorrow({
-            umbrella_id: borrow.umbrella_id,
-            borrowed_time: borrow.borrowed_time,
-          });
-        }
+        setProfile({
+          index_no: json.user.index_no,
+          username: json.user.username,
+          email: json.user.email,
+          is_verified: true,
+        });
+
+        setActiveBorrow(
+          json.active_loan
+            ? {
+                umbrella_id: json.active_loan.umbrella_id,
+                borrowed_time: json.active_loan.borrowed_time,
+                slot: json.active_loan.slot ?? undefined,
+              }
+            : null
+        );
       } catch (err) {
-        console.warn('Supabase profile lookup warning:', err);
+        console.warn('Profile lookup warning:', err);
       } finally {
         setLoading(false);
       }
     };
 
     fetchUserData();
-    const interval = setInterval(fetchUserData, 3500);
+    const interval = setInterval(fetchUserData, 5000);
     return () => clearInterval(interval);
   }, [router]);
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
     localStorage.removeItem('astrix_user');
     sessionStorage.clear();
     router.push('/login');

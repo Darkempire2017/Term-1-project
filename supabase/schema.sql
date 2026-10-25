@@ -1,89 +1,70 @@
 -- ================================================================
--- SMART UMBRELLA SHARING SYSTEM - SUPABASE DATABASE SCHEMA
--- Run this script in the Supabase SQL Editor (https://app.supabase.com)
+-- PROJECT ASTRIX - SUPABASE DATABASE SCHEMA
+-- Matches the tables and columns the app actually uses.
+-- Run in the Supabase SQL Editor to create a fresh database.
+-- For the existing live database, run migrations/20261025_lockdown.sql instead.
 -- ================================================================
 
--- Enable UUID extension if not already enabled
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- 1. USERS TABLE (Stores student university index, profile & email verification status)
+-- 1. USERS (one row per verified student)
 CREATE TABLE IF NOT EXISTS public.users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    index_number VARCHAR(50) UNIQUE NOT NULL,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    is_verified BOOLEAN DEFAULT FALSE,
-    verification_code VARCHAR(10),
-    verification_expires TIMESTAMP WITH TIME ZONE,
-    role VARCHAR(20) DEFAULT 'STUDENT' CHECK (role IN ('STUDENT', 'ADMIN')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    index_no VARCHAR(50) PRIMARY KEY,               -- e.g. 250373T (or DEV001 for testing)
+    username VARCHAR(100) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    password VARCHAR(255) NOT NULL,                 -- scrypt "salt:hash" (lib/password.ts)
+    verification_code VARCHAR(10),                  -- password-reset code, cleared after use
+    verification_expires TIMESTAMPTZ,
+    is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 2. UMBRELLA SLOTS TABLE (Represents physical slots with locks and NFC tags)
-CREATE TABLE IF NOT EXISTS public.umbrella_slots (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    slot_number INT UNIQUE NOT NULL,
-    tag_uid VARCHAR(100) UNIQUE NOT NULL, -- UID of the NFC tag hanging above or on the umbrella
-    umbrella_code VARCHAR(50),           -- Optional human-readable tag, e.g. "UMB-01"
-    status VARCHAR(20) DEFAULT 'AVAILABLE' CHECK (status IN ('AVAILABLE', 'BORROWED', 'MAINTENANCE')),
-    is_locked BOOLEAN DEFAULT TRUE,
-    last_scanned_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- 2. UMBRELLAS (one row per physical cabinet slot)
+CREATE TABLE IF NOT EXISTS public.umbrellas (
+    slot INT PRIMARY KEY CHECK (slot BETWEEN 1 AND 4),
+    umbrella_id VARCHAR(100) NOT NULL UNIQUE,       -- RFID tag UID of this slot's umbrella
+    availability BOOLEAN NOT NULL DEFAULT TRUE,     -- true when the umbrella is docked
+    borrowed_user VARCHAR(50) REFERENCES public.users(index_no) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 3. BORROW RECORDS TABLE (Tracks borrow history and return transactions)
+-- 3. BORROW RECORDS (loan history)
 CREATE TABLE IF NOT EXISTS public.borrow_records (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-    slot_id UUID NOT NULL REFERENCES public.umbrella_slots(id) ON DELETE CASCADE,
-    borrowed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    returned_at TIMESTAMP WITH TIME ZONE,
-    status VARCHAR(20) DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RETURNED', 'OVERDUE')),
-    notes TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    record_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    umbrella_id VARCHAR(100) NOT NULL,
+    index_no VARCHAR(50) NOT NULL REFERENCES public.users(index_no) ON DELETE CASCADE,
+    borrowed_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    due_time TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
+    returned_time TIMESTAMPTZ,
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RETURNED', 'OVERDUE')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Enable Row Level Security (RLS)
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.umbrella_slots ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.borrow_records ENABLE ROW LEVEL SECURITY;
+-- A student can have at most one open loan
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_loan_per_student
+    ON public.borrow_records(index_no)
+    WHERE status IN ('ACTIVE', 'OVERDUE');
 
--- Permissive policies for backend service role / public read of umbrella slots
-CREATE POLICY "Allow public read on umbrella slots"
-    ON public.umbrella_slots FOR SELECT
-    USING (true);
-
-CREATE POLICY "Allow full access with service role on users"
-    ON public.users FOR ALL
-    USING (true)
-    WITH CHECK (true);
-
-CREATE POLICY "Allow full access with service role on umbrella_slots"
-    ON public.umbrella_slots FOR ALL
-    USING (true)
-    WITH CHECK (true);
-
-CREATE POLICY "Allow full access with service role on borrow_records"
-    ON public.borrow_records FOR ALL
-    USING (true)
-    WITH CHECK (true);
-
--- Indexes for performance
-CREATE INDEX IF NOT EXISTS idx_users_index_number ON public.users(index_number);
-CREATE INDEX IF NOT EXISTS idx_users_email ON public.users(email);
-CREATE INDEX IF NOT EXISTS idx_slots_tag_uid ON public.umbrella_slots(tag_uid);
-CREATE INDEX IF NOT EXISTS idx_slots_status ON public.umbrella_slots(status);
-CREATE INDEX IF NOT EXISTS idx_borrow_records_user ON public.borrow_records(user_id);
 CREATE INDEX IF NOT EXISTS idx_borrow_records_status ON public.borrow_records(status);
 
--- Seed initial umbrella slots (Slots 1 to 4 with default NFC tag UIDs)
-INSERT INTO public.umbrella_slots (slot_number, tag_uid, umbrella_code, status, is_locked)
-VALUES 
-    (1, '04A1B2C3D4', 'UMB-01', 'AVAILABLE', true),
-    (2, '04B2C3D4E5', 'UMB-02', 'AVAILABLE', true),
-    (3, '04C3D4E5F6', 'UMB-03', 'AVAILABLE', true),
-    (4, '04D4E5F6A7', 'UMB-04', 'AVAILABLE', true)
-ON CONFLICT (slot_number) DO NOTHING;
+-- ================================================================
+-- ACCESS: only the server (service-role key) may read or write.
+-- Row level security is ON with NO policies, so the public anon key
+-- (which every browser can see) gets nothing. The service role
+-- bypasses RLS, which is what the API routes use.
+-- ================================================================
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.umbrellas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.borrow_records ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON public.users, public.umbrellas, public.borrow_records FROM anon, authenticated;
+
+-- ================================================================
+-- SEED: the 4 cabinet slots with the real umbrella tag UIDs
+-- ================================================================
+INSERT INTO public.umbrellas (slot, umbrella_id, availability)
+VALUES
+    (1, '53 01 B8 CC 33 00 01', TRUE),
+    (2, '53 07 B8 CC 33 00 01', TRUE),
+    (3, '53 08 B8 CC 33 00 01', TRUE),
+    (4, '53 09 B8 CC 33 00 01', TRUE)
+ON CONFLICT (slot) DO NOTHING;

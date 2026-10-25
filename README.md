@@ -1,137 +1,95 @@
 # ☂️ Project ASTRIX: IoT Smart Umbrella Borrowing System
-**University of Moratuwa (UoM) — Term 1 Engineering Project**  
-**Lead AI Architect:** Antigravity AI & Team Astrix  
-**Repository Branch:** `main`
+**University of Moratuwa (UoM) — Term 1 Engineering Project**
+**Team Astrix**
 
 ---
 
-## 📌 Executive Summary
-Project ASTRIX is an IoT-enabled campus umbrella sharing kiosk system designed for the University of Moratuwa. Students can scan their university student ID card with their phone to register, receive a 6-digit OTP, and borrow or return umbrellas at physical IoT station kiosks equipped with solenoid locks and NFC tags.
+## 📌 Summary
+ASTRIX is a campus umbrella-sharing cabinet. Students register by scanning their university ID barcode, verify their email with a 6-digit code, then borrow or return umbrellas from a 4-slot ESP32 cabinet with servo locks, push-button docking sensors and RFID-tagged umbrellas.
 
 ---
 
-## 🏛️ Master Architecture & Technology Stack
+## 🏛️ Architecture
 
 | Layer | Technology | Details |
 | :--- | :--- | :--- |
-| **Fullstack Framework** | **Next.js 15 (App Router)** | TypeScript, Tailwind CSS, Turbopack (`next dev --turbopack`) |
-| **Mobile UX Shell** | **Responsive Phone Viewport** | Centered mobile frame (`max-w-md mx-auto min-h-screen`) |
-| **Database & Auth** | **Supabase (PostgreSQL)** | URL: `https://ylmjqunzvhwzgyvlgauu.supabase.co` |
-| **ID Scanner** | **Live Barcode & QR Scanner** | `html5-qrcode` 100% private on-device camera scanner with checksum validation |
-| **IoT Cloud Broker** | **HiveMQ Cloud** | MQTT over TLS (Port 8883) & WebSockets (Port 8884) |
-| **Hardware / Firmware** | **ESP32 & Simulator** | RC522 NFC Reader, 4x Solenoid Relays, CLI simulator |
-| **Transactional Email** | **Gmail SMTP (`nodemailer`)** | 6-digit OTP verification, borrow & return receipts |
+| **Web app & API** | **Next.js 15 (App Router)** | TypeScript, Tailwind CSS, deployed on Vercel |
+| **Database** | **Supabase (PostgreSQL)** | Accessed only from API routes with the service-role key |
+| **Sessions** | **Signed httpOnly cookie** | `lib/session.ts`, signed with `AUTH_SECRET` |
+| **ID Scanner** | **`html5-qrcode`** | On-device barcode scanner with index-number validation |
+| **IoT broker** | **HiveMQ (MQTT)** | Public test broker by default; set a private broker for real use |
+| **Cabinet** | **ESP32-S3** | 4 servo locks, 4 push buttons, 4 RC522 RFID readers (`firmware/`) |
+| **Email** | **Gmail SMTP (`nodemailer`)**, Resend fallback | Verification codes, borrow and return receipts |
+
+### How a borrow works
+1. The student taps **Borrow**. The browser calls `POST /api/borrow` (the session cookie identifies the student).
+2. The API claims a free slot in the database, sends `{"action":"BORROW","slot":N}` to `astrix-umbrella/cabinet/command`, and waits up to 45 s for the cabinet's reply on `astrix-umbrella/cabinet/response`.
+3. On `SUCCESS` the API records the loan and emails a receipt. On `FAIL` it frees the slot again.
+
+Returns work the same way through `POST /api/return`. The return slot always comes from the student's loan (each umbrella has a home slot). The browser never writes to the database.
 
 ---
 
-## 🗄️ Database Schema & Live State
+## 🗄️ Database
+The real schema is in [`supabase/schema.sql`](supabase/schema.sql): `users`, `umbrellas` (slots 1–4) and `borrow_records`. Row level security is on with no policies, so only the server can read or write.
 
-The live Supabase database is active and populated with the following 3 tables:
+For the existing live database, run [`supabase/migrations/20261025_lockdown.sql`](supabase/migrations/20261025_lockdown.sql) once, **after** deploying this version.
 
-### 1. `users` Table
-* `index_no` (`VARCHAR(50)`, Primary Key) — Student Index Number (e.g. `210042A`)
-* `username` (`VARCHAR(100)`) — Student Full Name (locked from ID card)
-* `email` (`VARCHAR(255)`) — Editable student contact email
-* `password` (`VARCHAR(255)`) — Encrypted account password
-* `verification_code` (`VARCHAR(10)`) — 6-digit OTP
-* `verification_expires` (`TIMESTAMPTZ`) — OTP expiration timestamp
-* `is_verified` (`BOOLEAN`) — Student verification state (`true` / `false`)
-
-### 2. `umbrellas` Table (Pre-Seeded 1 to 4)
-* `slot` (`INT`, Primary Key: 1, 2, 3, 4)
-* `umbrella_id` (`VARCHAR(100)`) — Hardware RFID/NFC Tag UID:
-  * **Slot 1:** `04A1B2C3D4`
-  * **Slot 2:** `04B2C3D4E5`
-  * **Slot 3:** `04C3D4E5F6`
-  * **Slot 4:** `04D4E5F6A7`
-* `availability` (`BOOLEAN`) — `true` when docked, `false` when checked out
-* `borrowed_user` (`VARCHAR(50)`, Foreign Key -> `users.index_no`)
-
-### 3. `borrow_records` Table
-* `record_id` (`UUID`, Primary Key)
-* `umbrella_id` (`VARCHAR(100)`) — Matches NFC tag
-* `index_no` (`VARCHAR(50)`, Foreign Key -> `users.index_no`)
-* `borrowed_time` (`TIMESTAMPTZ`)
-* `due_time` (`TIMESTAMPTZ`, default `now() + 24 hours`)
-* `returned_time` (`TIMESTAMPTZ`)
-* `status` (`VARCHAR(20)`) — `'ACTIVE'` | `'RETURNED'` | `'OVERDUE'`
+| Slot | Umbrella tag UID |
+| :--- | :--- |
+| 1 | `53 01 B8 CC 33 00 01` |
+| 2 | `53 07 B8 CC 33 00 01` |
+| 3 | `53 08 B8 CC 33 00 01` |
+| 4 | `53 09 B8 CC 33 00 01` |
 
 ---
 
-## 📡 MQTT Topic Contracts
+## 📡 MQTT Contract
 
-* **Unlock Command:** `astrix/uom/kiosk-01/command/unlock`
-  * Borrow: `{"action": "BORROW_UNLOCK", "slot": 1, "duration_ms": 5000, "index_no": "210042A"}`
-  * Return: `{"action": "RETURN_UNLOCK", "slot": 2, "duration_ms": 8000, "index_no": "210042A"}`
-* **Removal Event:** `astrix/uom/kiosk-01/event/removed`
-  * `{"event": "UMBRELLA_REMOVED", "slot": 1, "umbrella_id": "04A1B2C3D4", "index_no": "210042A"}`
-* **Return Event:** `astrix/uom/kiosk-01/event/returned`
-  * `{"event": "UMBRELLA_RETURNED", "slot": 2, "umbrella_id": "04A1B2C3D4", "microswitch": true, "nfc_verified": true}`
-* **Station Heartbeat:** `astrix/uom/kiosk-01/status`
-  * `{"station_id": "kiosk-01", "online": true, "timestamp": 1792474441000}`
+* **Command** (server ➔ cabinet): `astrix-umbrella/cabinet/command`
+  * `{"action": "BORROW", "slot": 1}` or `{"action": "RETURN", "slot": 1}`
+* **Response** (cabinet ➔ server): `astrix-umbrella/cabinet/response`, QoS 0
 
----
+| Case | Response |
+| :--- | :--- |
+| Borrow success | `{"action":"BORROW","slot":X,"status":"SUCCESS","message":"Umbrella taken from Slot X. Closing the lock."}` |
+| Borrow fail | `{"action":"BORROW","slot":X,"status":"FAIL","reason":"NOT_TAKEN","message":"Umbrella was NOT taken from Slot X after 5 checks. Closing the lock."}` |
+| Return success | `{"action":"RETURN","slot":X,"status":"SUCCESS","message":"Umbrella X returned to Slot X. Closing the lock."}` |
+| Return fail | `{"action":"RETURN","slot":X,"status":"FAIL","reason":"NO_UMBRELLA","message":"No umbrella returned to Slot X after 5 checks. Closing the lock."}` |
+| Wrong umbrella | `{"action":"RETURN","slot":X,"status":"FAIL","reason":"WRONG_UMBRELLA","message":"Wrong umbrella in Slot X. Leaving the slot UNLOCKED - take it out and return Umbrella X."}` |
 
-## 🚀 Progress Tracker & What Has Been Built (Steps 1 to 6)
-
-### ✅ Completed Steps (1 to 6):
-1. **Step 1: Foundation & Environment:**
-   * Unified root Next.js App Router codebase with Tailwind CSS, Turbopack, and TypeScript.
-   * Supabase client initialization in `lib/supabase.ts` (browser + admin service-role).
-   * Archived legacy prototype files into `/_legacy_archive/`.
-2. **Step 2: Mobile Shell & Viewports:**
-   * Mobile phone container in `app/layout.tsx` (`max-w-md mx-auto min-h-screen`).
-   * Simulated dynamic island status bar in `components/PhoneHeader.tsx`.
-   * Bottom navigation bar in `components/BottomNav.tsx` (`Dashboard` | `Profile`).
-   * View Mode Switcher in `components/DevToolbar.tsx` for toggling **Student POV (Clean Mode)**.
-3. **Step 3: Screen 1 — Sign In & 2-Stage Sign Up:**
-   * `app/api/ocr/route.ts`: Gemini 2.5 Flash OCR extracting student info with image clarity verification and rejection banner if blurry.
-   * `app/signup/page.tsx` (Stage 1): Dedicated ID upload screen with camera capture and guidelines.
-   * `app/signup/details/page.tsx` (Stage 2): Name, Index No, and Address are **locked and unchangeable**; student only inputs their email.
-   * `app/login/page.tsx`: Index number and password authentication.
-4. **Step 4: Screen 2 — Verify / Reset Password (`/verify`):**
-   * 6-digit OTP verification inputs with auto-focus.
-   * Password creation and verification.
-   * Submitting automatically updates Supabase and **redirects back to `/login`** with a green confirmation banner and pre-filled index number.
-5. **Step 5: Screen 3 — Student Profile (`/profile`):**
-   * Student initials avatar, verified Moratuwa badge, university details, active loan status, and sign out button.
-6. **Step 6: Screen 4 — Dynamic 2-State Dashboard (`/dashboard`):**
-   * **State A (When Borrowing):** Shows `Available slot: Slot X`, active `Borrow Umbrella` button, disabled `Return` button, and visual 4-slot status matrix.
-   * **State B (When Returning):** Shows `Borrowed Umbrella ID`, live elapsed timer (`Since when`), disabled `Borrow` button, and active `Return Umbrella` button.
-7. **Step 7: Full API Routes, MQTT Worker, Simulator & Emails:**
-   * `/api/auth/*` (Sign up with OTP, verification, login).
-   * `/api/borrow` and `/api/return` with live Supabase transactions, 1-umbrella limits, and 24h due timers.
-   * `lib/mqtt.ts`: Publishes `BORROW_UNLOCK` and `RETURN_UNLOCK` commands to `astrix/uom/kiosk-01/command/unlock`.
-   * `lib/email.ts`: Resend email integration for verification OTPs, borrow receipts, and return receipts.
-   * `worker/mqtt-listener.ts`: HiveMQ Cloud background event listener.
-   * `firmware/mock_esp32.js`: Upgraded interactive hardware simulator with keyboard controls (`1-4`, `r`, `s`, `q`).
+> ⚠️ On the public broker anyone can publish to these topics. Before real use, move to a private broker (e.g. HiveMQ Cloud free tier) and allow only the cabinet to publish responses and only the server to publish commands. Set `HIVEMQ_*` in Vercel and `MQTT_USER`/`MQTT_PASS` in the firmware.
 
 ---
 
-## 💻 Running the App & Simulating Hardware
+## 💻 Running locally
 
-```powershell
-# 1. Install dependencies
+```bash
+cp .env.example .env.local   # then fill in the values
 npm install
-
-# 2. Start Next.js Development Server (Turbopack)
-npm run dev
-
-# 3. Type check (without disturbing the running dev server)
+npm run dev                  # http://localhost:3000
 npm run typecheck
 ```
-* **Local Web App:** `http://localhost:3000`
-* **Student Sign In:** `http://localhost:3000/login`
-* **Student ID Upload:** `http://localhost:3000/signup`
-* **Student Kiosk Dashboard:** `http://localhost:3000/dashboard`
-* **Student Profile:** `http://localhost:3000/profile`
+
+| Variable | Purpose |
+| :--- | :--- |
+| `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Database (server only) |
+| `AUTH_SECRET` | Signs session cookies and signup tokens (≥ 32 random characters) |
+| `DEV_INDEXES` | Index numbers that get the hardware testing console, e.g. `DEV001` |
+| `HIVEMQ_BROKER_URL`, `HIVEMQ_USERNAME`, `HIVEMQ_PASSWORD` | MQTT broker (optional; public broker if empty) |
+| `GMAIL_USER`, `GMAIL_APP_PASSWORD` or `RESEND_API_KEY` | Email delivery |
+
+Without an email provider, local development prints verification codes to the server console. In production, signup fails until email is configured.
+
+### Hardware tools
+* `npm run simulator` — interactive cabinet simulator (`firmware/mock_esp32.js`)
+* `npx tsx worker/mqtt-listener.ts` — read-only monitor that prints every cabinet command and response
+* `firmware/esp32_smart_umbrella.ino` — the cabinet firmware (fill in WiFi, and broker login if using a private broker)
 
 ---
 
-## 🤖 Instructions for AI Assistants (Antigravity / Cursor / Claude)
-
-If you are an AI assistant taking over or collaborating on this codebase:
-1. **Rule 1 (Permission First):** Always explain what files you plan to modify and ask for explicit "Approved" / "Yes" from the user before writing files.
-2. **Rule 2 (One Step at a Time):** Follow the roadmap in `ASTRIX_SPEC.md` strictly. Update the checklist as steps finish.
-3. **Rule 3 (Zero Build Breakages):** Keep the codebase compiling cleanly with `npm run typecheck`.
-4. **Current Status:** Steps 1 through 6 are **100% complete**. You should immediately proceed to **Step 7**.
+## 🔒 Security notes
+* Secrets live only in environment variables. Never add fallback keys to source files.
+* API routes take the student from the session cookie, never from the request body.
+* Developer accounts are listed in `DEV_INDEXES`; there is no special password in the code.
+* Rate limits in `lib/rate-limit.ts` are per server instance. For production, back them with a shared store (Upstash Redis or Vercel KV).

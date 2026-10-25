@@ -75,6 +75,10 @@ export async function POST(request: Request) {
     // 5. Publish HiveMQ MQTT return command to cabinet (Topic: astrix-umbrella/cabinet/command)
     const mqttResult = await publishReturnCommand(targetSlot);
 
+    if (!mqttResult.success) {
+      console.warn('⚠️ [API/Return] MQTT command failed to reach broker:', mqttResult.error);
+    }
+
     // 6. Fetch user profile and send email receipt in background
     (async () => {
       try {

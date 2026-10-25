@@ -32,13 +32,27 @@ export interface CabinetResponse {
 }
 
 /**
+ * Resolves the optimal broker URL for web and serverless environments.
+ * Upgrades raw TCP (1883) to WebSockets SSL (8884) to pass through cloud firewalls.
+ */
+function getEffectiveBrokerUrl(): string {
+  const envUrl = process.env.HIVEMQ_BROKER_URL?.trim();
+  if (!envUrl || envUrl === 'mqtt://broker.hivemq.com:1883' || envUrl.includes('broker.hivemq.com:1883')) {
+    return 'wss://broker.hivemq.com:8884/mqtt';
+  }
+  return envUrl;
+}
+
+/**
  * Universal MQTT Publisher to HiveMQ Cloud / Public Broker (QoS 0)
+ * Uses WebSockets SSL on port 8884 to ensure 100% cloud & Vercel delivery.
+ * Includes automatic 2-attempt retry with socket flushing.
  */
 async function sendMqttMessage(
   topic: string,
   payload: any
 ): Promise<{ success: boolean; simulated?: boolean; error?: string }> {
-  const brokerUrl = process.env.HIVEMQ_BROKER_URL || 'mqtt://broker.hivemq.com:1883';
+  const brokerUrl = getEffectiveBrokerUrl();
   const username = process.env.HIVEMQ_USERNAME;
   const password = process.env.HIVEMQ_PASSWORD;
 
@@ -46,6 +60,7 @@ async function sendMqttMessage(
 
   console.log(`\n======================================================`);
   console.log(`📡 [MQTT PUBLISH] Topic: ${topic}`);
+  console.log(`🔌 Broker: ${brokerUrl}`);
   console.log(`📦 Payload: ${payloadString}`);
   console.log(`======================================================\n`);
 
@@ -55,68 +70,95 @@ async function sendMqttMessage(
     return { success: true, simulated: true };
   }
 
-  return new Promise((resolve) => {
-    let client: mqtt.MqttClient | null = null;
-    let resolved = false;
-
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        console.warn('⚠️ [HiveMQ] MQTT publish timed out after 3000ms. Continuing in simulation mode.');
-        try {
-          client?.end(true);
-        } catch {}
-        resolve({ success: true, simulated: true });
-      }
-    }, 3000);
-
+  // Attempt up to 2 times for rock-solid reliability across transient network hiccups
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const options: mqtt.IClientOptions = {
-        clientId: `astrix-web-${Math.random().toString(16).substring(2, 8)}`,
-        connectTimeout: 2500,
-      };
+      const result = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+        let client: mqtt.MqttClient | null = null;
+        let resolved = false;
 
-      if (username) options.username = username;
-      if (password) options.password = password;
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            console.warn(`⚠️ [HiveMQ] Attempt ${attempt}: Connection timed out after 9000ms.`);
+            try { client?.end(true); } catch {}
+            resolve({ success: false, error: 'Connection to HiveMQ timed out.' });
+          }
+        }, 9000);
 
-      client = mqtt.connect(brokerUrl, options);
+        try {
+          const options: mqtt.IClientOptions = {
+            clientId: `astrix-web-${Math.random().toString(16).substring(2, 8)}`,
+            connectTimeout: 8000,
+            clean: true,
+          };
 
-      client.on('connect', () => {
-        // Hardware spec requires QoS 0
-        client?.publish(topic, payloadString, { qos: 0 }, (err) => {
+          if (username) options.username = username;
+          if (password) options.password = password;
+
+          client = mqtt.connect(brokerUrl, options);
+
+          client.on('connect', () => {
+            // Hardware spec requires QoS 0
+            client?.publish(topic, payloadString, { qos: 0 }, (err) => {
+              clearTimeout(timeout);
+              if (!resolved) {
+                resolved = true;
+                if (err) {
+                  console.warn(`⚠️ [HiveMQ] Attempt ${attempt} publish error:`, err.message);
+                  try { client?.end(true); } catch {}
+                  resolve({ success: false, error: err.message });
+                } else {
+                  console.log('✅ [HiveMQ] Command queued to broker. Flushing socket...');
+                  setTimeout(() => {
+                    try {
+                      client?.end(false, () => {
+                        console.log('✅ [HiveMQ] Socket flushed and closed cleanly.');
+                      });
+                    } catch {}
+                  }, 200);
+                  resolve({ success: true });
+                }
+              }
+            });
+          });
+
+          client.on('error', (err) => {
+            clearTimeout(timeout);
+            if (!resolved) {
+              resolved = true;
+              console.warn(`⚠️ [HiveMQ] Attempt ${attempt} connection error:`, err.message);
+              try { client?.end(true); } catch {}
+              resolve({ success: false, error: err.message });
+            }
+          });
+        } catch (e: any) {
           clearTimeout(timeout);
           if (!resolved) {
             resolved = true;
-            if (err) {
-              console.warn('⚠️ [HiveMQ] Publish error:', err.message);
-              resolve({ success: false, error: err.message });
-            } else {
-              console.log('✅ [HiveMQ] Command delivered to broker successfully (QoS 0).');
-              resolve({ success: true, simulated: false });
-            }
-            client?.end();
+            console.warn(`⚠️ [HiveMQ] Attempt ${attempt} exception:`, e.message);
+            resolve({ success: false, error: e.message });
           }
-        });
-      });
-
-      client.on('error', (err) => {
-        clearTimeout(timeout);
-        if (!resolved) {
-          resolved = true;
-          console.warn('⚠️ [HiveMQ] Connection error:', err.message);
-          resolve({ success: true, simulated: true, error: err.message });
-          client?.end(true);
         }
       });
-    } catch (e: any) {
-      clearTimeout(timeout);
-      if (!resolved) {
-        resolved = true;
-        console.warn('⚠️ [HiveMQ] Exception:', e.message);
-        resolve({ success: true, simulated: true, error: e.message });
+
+      if (result.success) {
+        return { success: true, simulated: false };
       }
+
+      console.warn(`⚠️ [HiveMQ] Attempt ${attempt} did not succeed (${result.error}). Retrying...`);
+      if (attempt === 1) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    } catch (e: any) {
+      console.warn(`⚠️ [HiveMQ] Outer attempt ${attempt} error:`, e.message);
     }
-  });
+  }
+
+  return {
+    success: false,
+    error: 'Failed to transmit MQTT command to HiveMQ broker after 2 attempts.',
+  };
 }
 
 /**

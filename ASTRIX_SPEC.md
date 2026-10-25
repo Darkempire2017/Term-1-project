@@ -92,7 +92,9 @@
 
 ## 📡 MQTT Interface Contracts (Astrix Umbrella Cabinet — Official Hardware Contract)
 
-* **Broker:** `broker.hivemq.com:1883` (QoS 0)
+* **Broker:** `broker.hivemq.com` (QoS 0)
+  * **ESP32 / Microcontroller (TCP):** Port `1883` (`mqtt://broker.hivemq.com:1883`)
+  * **Web & Serverless / Vercel (WebSockets SSL):** Port `8884` (`wss://broker.hivemq.com:8884/mqtt` with 200ms socket flush delay and automatic retry)
 * **Command Topic (Server ➔ ESP32):** `astrix-umbrella/cabinet/command`
   * Borrow Command: `{"action": "BORROW", "slot": 1}`
   * Return Command: `{"action": "RETURN", "slot": 1}`

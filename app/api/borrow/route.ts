@@ -64,6 +64,24 @@ export async function POST(request: Request) {
     // 4. Publish HiveMQ MQTT command to cabinet (Topic: astrix-umbrella/cabinet/command)
     const mqttResult = await publishBorrowCommand(slot);
 
+    if (!mqttResult.success) {
+      console.warn('⚠️ [API/Borrow] MQTT command failed to reach broker:', mqttResult.error);
+      // Rollback the slot pending state so slot is not stuck
+      await supabaseAdmin
+        .from('umbrellas')
+        .update({ borrowed_user: null })
+        .eq('slot', slot);
+
+      return NextResponse.json(
+        {
+          success: false,
+          message: `Cabinet communication error: ${mqttResult.error || 'Failed to reach MQTT broker'}. Please try again.`,
+          mqtt: mqttResult,
+        },
+        { status: 502 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
       message: `Slot #${slot} opening. Please pull the umbrella to complete your borrow.`,

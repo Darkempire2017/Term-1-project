@@ -65,9 +65,37 @@ async function dispatchEmail(params: {
     }
   }
 
-  // Fallback Simulation Mode
-  console.log(`ℹ️ [Email Simulation] Neither Gmail SMTP nor Resend configured. Logged above.`);
+  // No provider configured: fail in production, simulate locally
+  if (process.env.NODE_ENV === 'production') {
+    console.error('❌ [Email] Neither Gmail SMTP nor Resend is configured.');
+    return { success: false, error: 'No email provider configured.' };
+  }
+  console.log(`ℹ️ [Email Simulation] Neither Gmail SMTP nor Resend configured. Email not sent.`);
   return { success: true, id: 'demo-simulated-id' };
+}
+
+const emailProviderConfigured = Boolean(gmailTransporter || resend);
+
+/**
+ * Local development only: print a one-time code when no email provider is set up.
+ * Codes are never logged in production or when real email delivery is configured.
+ */
+function logCodeForLocalDev(label: string, otpCode: string) {
+  if (!emailProviderConfigured && process.env.NODE_ENV !== 'production') {
+    console.log(`🔑 [Local dev only] ${label}: ${otpCode}`);
+  }
+}
+
+/**
+ * Escape user-supplied text (e.g. student names) before putting it into email HTML
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
@@ -78,11 +106,9 @@ export async function sendVerificationOtpEmail(
   studentName: string,
   otpCode: string
 ): Promise<{ success: boolean; id?: string; error?: string }> {
-  console.log(`\n======================================================`);
-  console.log(`✉️ [EMAIL DISPATCH] Verification OTP for ${toEmail}:`);
-  console.log(`👤 Student: ${studentName}`);
-  console.log(`🔑 OTP CODE: >>> ${otpCode} <<<`);
-  console.log(`======================================================\n`);
+  console.log(`✉️ [EMAIL DISPATCH] Verification code email for ${toEmail}`);
+  logCodeForLocalDev('Verification code', otpCode);
+  studentName = escapeHtml(studentName);
 
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 20px; background-color: #ffffff;">
@@ -134,11 +160,9 @@ export async function sendPasswordResetOtpEmail(
   indexNo: string,
   otpCode: string
 ): Promise<{ success: boolean; id?: string; error?: string }> {
-  console.log(`\n======================================================`);
-  console.log(`🔐 [RESET OTP DISPATCH] Password Reset Code for ${toEmail}:`);
-  console.log(`👤 Student: ${studentName} (${indexNo})`);
-  console.log(`🔑 RESET CODE: >>> ${otpCode} <<<`);
-  console.log(`======================================================\n`);
+  console.log(`🔐 [RESET OTP DISPATCH] Password reset email for ${toEmail} (${indexNo})`);
+  logCodeForLocalDev('Password reset code', otpCode);
+  studentName = escapeHtml(studentName);
 
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 20px; background-color: #ffffff;">
@@ -199,6 +223,7 @@ export async function sendBorrowReceiptEmail(
   console.log(`\n======================================================`);
   console.log(`☂️ [RECEIPT DISPATCH] Borrow Confirmation for ${toEmail}:`);
   console.log(`👤 Student: ${studentName}`);
+  studentName = escapeHtml(studentName);
   console.log(`📍 Slot: #${slot} | Tag UID: ${umbrellaId}`);
   console.log(`⏰ Due By: ${formattedDue}`);
   console.log(`======================================================\n`);
@@ -252,6 +277,7 @@ export async function sendReturnReceiptEmail(
   console.log(`\n======================================================`);
   console.log(`✅ [RECEIPT DISPATCH] Return Confirmation for ${toEmail}:`);
   console.log(`👤 Student: ${studentName}`);
+  studentName = escapeHtml(studentName);
   console.log(`📍 Returned to Slot: #${slot} | Tag UID: ${umbrellaId}`);
   console.log(`⏳ Rental Duration: ${durationStr}`);
   console.log(`======================================================\n`);
@@ -303,6 +329,7 @@ export async function sendWelcomeSignupEmail(
   console.log(`\n======================================================`);
   console.log(`🎉 [WELCOME DISPATCH] Account Created for ${toEmail}:`);
   console.log(`👤 Student: ${studentName}`);
+  studentName = escapeHtml(studentName);
   console.log(`🎓 Index No: ${indexNo}`);
   console.log(`======================================================\n`);
 

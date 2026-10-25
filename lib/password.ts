@@ -11,14 +11,24 @@ export function hashPassword(password: string): string {
 }
 
 /**
+ * True for passwords stored before hashing was added (no `salt:hash` format)
+ */
+export function isLegacyPlaintext(storedHash: string): boolean {
+  return !storedHash.includes(':');
+}
+
+/**
  * Verify a plain password against a stored salt:hash string using timing-safe comparison.
+ * Legacy plaintext rows are compared in constant time; the login route re-hashes them
+ * on the first successful sign-in.
  */
 export function verifyPassword(password: string, storedHash: string): boolean {
   if (!password || !storedHash) return false;
 
-  // Backward compatibility in case of legacy plaintext
-  if (!storedHash.includes(':')) {
-    return password.trim() === storedHash.trim();
+  if (isLegacyPlaintext(storedHash)) {
+    const a = Buffer.from(password.trim(), 'utf8');
+    const b = Buffer.from(storedHash.trim(), 'utf8');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
   const [salt, hash] = storedHash.split(':');

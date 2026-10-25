@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { verifyVerificationToken } from '@/lib/auth-token';
+import { hashOtp, verifyVerificationToken } from '@/lib/auth-token';
 import { hashPassword } from '@/lib/password';
 import { sendWelcomeSignupEmail } from '@/lib/email';
+import { safeEqual } from '@/lib/otp';
+import { clientIp, rateLimit } from '@/lib/rate-limit';
 
 export async function POST(request: Request) {
   try {
@@ -27,13 +29,20 @@ export async function POST(request: Request) {
       );
     }
 
-    let studentData: {
-      index_no: string;
-      username: string;
-      email: string;
-    } | null = null;
+    // Max 5 code guesses per account and 20 per IP every 15 minutes
+    const ip = clientIp(request);
+    if (!rateLimit(`verify:idx:${cleanIndex}`, 5, 15 * 60 * 1000) || !rateLimit(`verify:ip:${ip}`, 20, 15 * 60 * 1000)) {
+      return NextResponse.json(
+        { success: false, message: 'Too many attempts. Please wait 15 minutes and request a new code.' },
+        { status: 429 }
+      );
+    }
 
-    // 1. Verify via signed verification token (Zero unverified database entries)
+    const hashedPassword = hashPassword(newPassword);
+
+    // ------------------------------------------------------------------
+    // 1. Signup: verify via signed token (no unverified rows in the database)
+    // ------------------------------------------------------------------
     if (verification_token) {
       const payload = verifyVerificationToken(verification_token);
       if (!payload) {
@@ -50,65 +59,36 @@ export async function POST(request: Request) {
         );
       }
 
-      if (payload.otp !== cleanCode) {
+      if (!safeEqual(payload.otp_hash, hashOtp(cleanIndex, cleanCode))) {
         return NextResponse.json(
           { success: false, message: 'Invalid verification code. Please check your email and try again.' },
           { status: 400 }
         );
       }
 
-      studentData = {
-        index_no: payload.index_no,
-        username: payload.username,
-        email: payload.email,
-      };
-    } else {
-      // 2. Fallback: Lookup in database (For existing users or password resets)
-      const { data: user, error: fetchError } = await supabaseAdmin
+      // Never overwrite an account that is already verified
+      const { data: existing, error: lookupError } = await supabaseAdmin
         .from('users')
-        .select('*')
+        .select('is_verified')
         .eq('index_no', cleanIndex)
         .maybeSingle();
 
-      if (fetchError || !user) {
+      if (lookupError) {
+        console.error('❌ [API/Auth/Verify] Lookup error:', lookupError.message);
+        return NextResponse.json({ success: false, message: 'Verification failed. Please try again.' }, { status: 500 });
+      }
+
+      if (existing?.is_verified) {
         return NextResponse.json(
-          { success: false, message: 'User not found or verification session expired. Please sign up again.' },
-          { status: 404 }
+          { success: false, message: 'This account is already verified. Please sign in, or use Forgot Password.' },
+          { status: 409 }
         );
       }
 
-      if (user.verification_code !== cleanCode) {
-        return NextResponse.json(
-          { success: false, message: 'Invalid verification code. Please check your email and try again.' },
-          { status: 400 }
-        );
-      }
-
-      // Check code expiration (15 minutes)
-      if (user.verification_expires && new Date(user.verification_expires).getTime() < Date.now()) {
-        return NextResponse.json(
-          { success: false, message: 'Verification code has expired. Please request a new reset code.' },
-          { status: 400 }
-        );
-      }
-
-      studentData = {
-        index_no: user.index_no,
-        username: user.username,
-        email: user.email,
-      };
-    }
-
-    // 3. Hash password and insert/update the verified student account in Supabase
-    const hashedPassword = hashPassword(newPassword);
-    const isSignup = Boolean(verification_token);
-
-    const { error: upsertError } = await supabaseAdmin
-      .from('users')
-      .upsert({
-        index_no: studentData.index_no,
-        username: studentData.username,
-        email: studentData.email,
+      const { error: upsertError } = await supabaseAdmin.from('users').upsert({
+        index_no: payload.index_no,
+        username: payload.username,
+        email: payload.email,
         password: hashedPassword,
         is_verified: true,
         verification_code: null,
@@ -116,46 +96,88 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString(),
       });
 
-    if (upsertError) {
-      console.error('❌ [API/Auth/Verify] Supabase upsert error:', upsertError.message);
-      return NextResponse.json(
-        { success: false, message: 'Failed to save verified user account. ' + upsertError.message },
-        { status: 500 }
-      );
-    }
+      if (upsertError) {
+        console.error('❌ [API/Auth/Verify] Supabase upsert error:', upsertError.message);
+        return NextResponse.json(
+          { success: false, message: 'Failed to save your account. Please try again.' },
+          { status: 500 }
+        );
+      }
 
-    // 4. Send Welcome & Account Activation confirmation email on signup only
-    if (isSignup) {
+      // Send Welcome & Account Activation confirmation email
       (async () => {
         try {
-          await sendWelcomeSignupEmail(
-            studentData.email,
-            studentData.username,
-            studentData.index_no
-          );
+          await sendWelcomeSignupEmail(payload.email, payload.username, payload.index_no);
         } catch (emailErr: any) {
           console.warn('⚠️ [API/Auth/Verify] Welcome email warning:', emailErr?.message);
         }
       })();
+
+      return NextResponse.json({
+        success: true,
+        message: 'Account verified successfully and password set.',
+        is_reset: false,
+        user: { index_no: payload.index_no, username: payload.username, email: payload.email },
+      });
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Password reset: code stored on the user row by /api/auth/forgot-password
+    // ------------------------------------------------------------------
+    const { data: user, error: fetchError } = await supabaseAdmin
+      .from('users')
+      .select('index_no, username, email, verification_code, verification_expires')
+      .eq('index_no', cleanIndex)
+      .maybeSingle();
+
+    if (fetchError || !user || !user.verification_code) {
+      return NextResponse.json(
+        { success: false, message: 'No reset code found for this account. Please request a new code.' },
+        { status: 400 }
+      );
+    }
+
+    if (!safeEqual(String(user.verification_code), cleanCode)) {
+      return NextResponse.json(
+        { success: false, message: 'Invalid verification code. Please check your email and try again.' },
+        { status: 400 }
+      );
+    }
+
+    if (!user.verification_expires || new Date(user.verification_expires).getTime() < Date.now()) {
+      return NextResponse.json(
+        { success: false, message: 'Verification code has expired. Please request a new reset code.' },
+        { status: 400 }
+      );
+    }
+
+    // Only the password changes — name and email stay as they were
+    const { error: updateError } = await supabaseAdmin
+      .from('users')
+      .update({
+        password: hashedPassword,
+        verification_code: null,
+        verification_expires: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('index_no', cleanIndex);
+
+    if (updateError) {
+      console.error('❌ [API/Auth/Verify] Password update error:', updateError.message);
+      return NextResponse.json(
+        { success: false, message: 'Failed to reset your password. Please try again.' },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({
       success: true,
-      message: isSignup 
-        ? 'Account verified successfully and password set.' 
-        : 'Password reset successfully! You can now sign in with your new password.',
-      is_reset: !isSignup,
-      user: {
-        index_no: studentData.index_no,
-        username: studentData.username,
-        email: studentData.email,
-      },
+      message: 'Password reset successfully! You can now sign in with your new password.',
+      is_reset: true,
+      user: { index_no: user.index_no, username: user.username, email: user.email },
     });
   } catch (error: any) {
     console.error('❌ [API/Auth/Verify] Error:', error);
-    return NextResponse.json(
-      { success: false, message: error.message || 'Verification failed.' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, message: 'Verification failed. Please try again.' }, { status: 500 });
   }
 }

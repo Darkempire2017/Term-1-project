@@ -1,6 +1,7 @@
 // ==============================================================================
 // PROJECT ASTRIX - DATA CONTRACTS & TYPES
 // University of Moratuwa
+// (Cabinet MQTT command/response types live in lib/mqtt.ts)
 // ==============================================================================
 
 export interface User {
@@ -17,7 +18,7 @@ export interface User {
 
 export interface Umbrella {
   slot: number; // 1, 2, 3, 4
-  umbrella_id: string; // e.g. "04A1B2C3D4"
+  umbrella_id: string; // RFID tag UID, e.g. "53 01 B8 CC 33 00 01"
   availability: boolean;
   borrowed_user: string | null; // references users.index_no
   updated_at?: string;
@@ -34,34 +35,28 @@ export interface BorrowRecord {
   created_at?: string;
 }
 
-// MQTT Unlock Command sent to hardware
-export interface KioskUnlockCommand {
-  action: 'BORROW_UNLOCK' | 'RETURN_UNLOCK';
-  slot: number;
-  duration_ms: number;
-  index_no: string;
-}
+// Loans that still have an umbrella out (OVERDUE is still an open loan)
+export const OPEN_LOAN_STATUSES = ['ACTIVE', 'OVERDUE'] as const;
 
-// Hardware Removal Event
-export interface UmbrellaRemovedEvent {
-  event: 'UMBRELLA_REMOVED';
+// Slot status as sent to the browser (no other students' index numbers)
+export interface PublicSlot {
   slot: number;
   umbrella_id: string;
-  index_no: string;
+  availability: boolean;
 }
 
-// Hardware Returned Event
-export interface UmbrellaReturnedEvent {
-  event: 'UMBRELLA_RETURNED';
-  slot: number;
-  umbrella_id: string;
-  microswitch: boolean;
-  nfc_verified: boolean;
-}
-
-// Hardware Status Heartbeat
-export interface KioskStatusEvent {
-  station_id: string;
-  online: boolean;
-  timestamp: number;
+// Response of GET /api/me
+export interface MeResponse {
+  success: true;
+  user: { index_no: string; username: string; email: string };
+  is_dev: boolean;
+  slots: PublicSlot[];
+  active_loan: {
+    record_id: string;
+    umbrella_id: string;
+    slot: number | null;
+    borrowed_time: string;
+    due_time: string;
+    is_overdue: boolean;
+  } | null;
 }

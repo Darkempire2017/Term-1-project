@@ -1,133 +1,181 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { publishBorrowCommand } from '@/lib/mqtt';
+import { cabinetErrorMessage, runCabinetCommand } from '@/lib/mqtt';
+import { sendBorrowReceiptEmail } from '@/lib/email';
+import { getSessionIndex } from '@/lib/session';
+import { isDevIndex } from '@/lib/dev';
+import { findOpenLoan } from '@/lib/loans';
+import { rateLimit } from '@/lib/rate-limit';
 
+// The cabinet takes up to ~20 s to report the result, so allow the route to wait
+export const maxDuration = 60;
+
+/**
+ * Borrow: claim a free slot, send BORROW to the cabinet, wait for its response,
+ * and only then record the loan. Nothing is written from the browser.
+ */
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { index_no, slot: requestedSlot } = body;
+    const indexNo = await getSessionIndex();
+    if (!indexNo) {
+      return NextResponse.json({ success: false, message: 'Please sign in to borrow an umbrella.' }, { status: 401 });
+    }
 
-    const cleanIndex = index_no?.trim().toUpperCase();
-    if (!cleanIndex) {
+    if (!rateLimit(`borrow:${indexNo}`, 5, 10 * 60 * 1000)) {
       return NextResponse.json(
-        { success: false, message: 'Student Index Number is required.' },
+        { success: false, message: 'Too many borrow attempts. Please wait a few minutes.' },
+        { status: 429 }
+      );
+    }
+
+    const body = await request.json().catch(() => ({}));
+    const isDev = isDevIndex(indexNo);
+
+    // ------------------------------------------------------------------
+    // Developer accounts: actuate any slot directly, no loan is recorded
+    // ------------------------------------------------------------------
+    if (isDev) {
+      const slot = Number(body?.slot);
+      if (!Number.isInteger(slot) || slot < 1 || slot > 4) {
+        return NextResponse.json({ success: false, message: 'Choose a slot from 1 to 4.' }, { status: 400 });
+      }
+
+      const result = await runCabinetCommand('BORROW', slot);
+      if (!result.ok) {
+        return NextResponse.json(
+          { success: false, message: cabinetErrorMessage(result.error, 'BORROW'), slot },
+          { status: result.error === 'TIMEOUT' ? 504 : 502 }
+        );
+      }
+      return NextResponse.json({
+        success: result.response.status === 'SUCCESS',
+        message: result.response.message,
+        reason: result.response.reason,
+        slot,
+        dev: true,
+      });
+    }
+
+    // ------------------------------------------------------------------
+    // Students: one open loan at a time
+    // ------------------------------------------------------------------
+    const openLoan = await findOpenLoan(indexNo);
+    if (openLoan) {
+      return NextResponse.json(
+        { success: false, message: 'You already have an umbrella. Please return it before borrowing another.' },
         { status: 400 }
       );
     }
 
-    const isDevAccount = cleanIndex === 'DEV001';
+    // Claim the first free slot with one conditional update, so two students
+    // borrowing at the same moment can never be sent to the same slot
+    const { data: freeSlots, error: freeError } = await supabaseAdmin
+      .from('umbrellas')
+      .select('slot')
+      .eq('availability', true)
+      .is('borrowed_user', null)
+      .order('slot', { ascending: true });
 
-    // 1. Check for active borrow record in Supabase (DEV001 can bypass the 1-umbrella limit)
-    if (!isDevAccount) {
-      const { data: activeLoan } = await supabaseAdmin
-        .from('borrow_records')
-        .select('*')
-        .eq('index_no', cleanIndex)
-        .eq('status', 'ACTIVE')
-        .maybeSingle();
-
-      if (activeLoan) {
-        return NextResponse.json(
-          {
-            success: false,
-            message: 'You already have an active umbrella loan. Please return it before borrowing another.',
-            activeLoan,
-          },
-          { status: 400 }
-        );
-      }
+    if (freeError) {
+      console.error('❌ [API/Borrow] Slot lookup error:', freeError.message);
+      return NextResponse.json({ success: false, message: 'Could not check the station. Please try again.' }, { status: 500 });
     }
 
-    // 2. Determine target umbrella slot
-    let targetSlotData: { slot: number; umbrella_id: string } | null = null;
-
-    if (isDevAccount && typeof requestedSlot === 'number' && requestedSlot >= 1 && requestedSlot <= 4) {
-      // DEV001 direct slot unlock
-      const { data: explicitSlot, error: explicitErr } = await supabaseAdmin
+    let claimed: { slot: number; umbrella_id: string } | null = null;
+    for (const { slot } of freeSlots || []) {
+      const { data: rows } = await supabaseAdmin
         .from('umbrellas')
-        .select('*')
-        .eq('slot', requestedSlot)
-        .maybeSingle();
-
-      if (explicitErr || !explicitSlot) {
-        return NextResponse.json(
-          { success: false, message: `Slot #${requestedSlot} not found in database.` },
-          { status: 404 }
-        );
-      }
-      targetSlotData = explicitSlot;
-    } else {
-      // Standard flow: Find next available umbrella slot in Supabase
-      const { data: availableSlot, error: slotError } = await supabaseAdmin
-        .from('umbrellas')
-        .select('*')
+        .update({ borrowed_user: indexNo })
+        .eq('slot', slot)
         .eq('availability', true)
-        .order('slot', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (slotError || !availableSlot) {
-        return NextResponse.json(
-          {
-            success: false,
-            message: 'All umbrellas are currently in use. Please check back soon.',
-          },
-          { status: 400 }
-        );
+        .is('borrowed_user', null)
+        .select('slot, umbrella_id');
+      if (rows && rows.length > 0) {
+        claimed = rows[0];
+        break;
       }
-      targetSlotData = availableSlot;
     }
 
-    if (!targetSlotData) {
+    if (!claimed) {
       return NextResponse.json(
-        { success: false, message: 'No umbrella slot found to unlock.' },
-        { status: 400 }
+        { success: false, message: 'All umbrellas are currently in use. Please check back soon.' },
+        { status: 409 }
       );
     }
 
-    const { slot, umbrella_id } = targetSlotData;
-
-    // 3. Mark the slot with the pending student index (skipped for DEV001 to prevent loan creation)
-    if (!isDevAccount) {
-      await supabaseAdmin
-        .from('umbrellas')
-        .update({ borrowed_user: cleanIndex })
-        .eq('slot', slot);
-    }
-
-    // 4. Publish HiveMQ MQTT command to cabinet (Topic: astrix-umbrella/cabinet/command)
-    const mqttResult = await publishBorrowCommand(slot);
-
-    if (!mqttResult.success) {
-      console.warn('⚠️ [API/Borrow] MQTT command failed to reach broker:', mqttResult.error);
-      // Rollback the slot pending state so slot is not stuck
-      await supabaseAdmin
+    const releaseClaim = () =>
+      supabaseAdmin
         .from('umbrellas')
         .update({ borrowed_user: null })
-        .eq('slot', slot);
+        .eq('slot', claimed!.slot)
+        .eq('availability', true)
+        .eq('borrowed_user', indexNo);
 
+    const result = await runCabinetCommand('BORROW', claimed.slot);
+
+    if (!result.ok) {
+      await releaseClaim();
       return NextResponse.json(
-        {
-          success: false,
-          message: `Cabinet communication error: ${mqttResult.error || 'Failed to reach MQTT broker'}. Please try again.`,
-          mqtt: mqttResult,
-        },
-        { status: 502 }
+        { success: false, message: cabinetErrorMessage(result.error, 'BORROW'), slot: claimed.slot },
+        { status: result.error === 'TIMEOUT' ? 504 : 502 }
       );
+    }
+
+    // Case 2: the umbrella was not taken — free the slot again
+    if (result.response.status !== 'SUCCESS') {
+      await releaseClaim();
+      return NextResponse.json({
+        success: false,
+        message: result.response.message,
+        reason: result.response.reason,
+        slot: claimed.slot,
+      });
+    }
+
+    // Case 1: umbrella taken — record the loan
+    const now = new Date();
+    const dueTime = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24h window
+
+    await supabaseAdmin
+      .from('umbrellas')
+      .update({ availability: false, borrowed_user: indexNo })
+      .eq('slot', claimed.slot);
+
+    const { error: insertError } = await supabaseAdmin.from('borrow_records').insert({
+      umbrella_id: claimed.umbrella_id,
+      index_no: indexNo,
+      status: 'ACTIVE',
+      borrowed_time: now.toISOString(),
+      due_time: dueTime.toISOString(),
+    });
+
+    if (insertError) {
+      console.error('❌ [API/Borrow] Loan insert error:', insertError.message);
+    }
+
+    // Borrow receipt email
+    try {
+      const { data: user } = await supabaseAdmin
+        .from('users')
+        .select('email, username')
+        .eq('index_no', indexNo)
+        .maybeSingle();
+      if (user?.email) {
+        await sendBorrowReceiptEmail(user.email, user.username || 'Student', claimed.slot, claimed.umbrella_id, dueTime);
+      }
+    } catch (e) {
+      console.warn('⚠️ [API/Borrow] Receipt email warning:', e);
     }
 
     return NextResponse.json({
       success: true,
-      message: `Slot #${slot} opening. Please pull the umbrella to complete your borrow.`,
-      slot,
-      umbrella_id,
-      mqtt: mqttResult,
+      message: result.response.message,
+      slot: claimed.slot,
+      umbrella_id: claimed.umbrella_id,
+      due_time: dueTime.toISOString(),
     });
   } catch (error: any) {
     console.error('❌ [API/Borrow] Error:', error);
-    return NextResponse.json(
-      { success: false, message: error.message || 'Borrow request failed.' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, message: 'Borrow request failed. Please try again.' }, { status: 500 });
   }
 }

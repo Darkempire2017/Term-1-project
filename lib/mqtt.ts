@@ -9,194 +9,142 @@ export const MQTT_TOPIC_COMMAND = 'astrix-umbrella/cabinet/command';
 // 2. ESP32 ➔ Server Response Topic
 export const MQTT_TOPIC_RESPONSE = 'astrix-umbrella/cabinet/response';
 
-// Backwards compatibility aliases
-export const MQTT_TOPIC_COMMAND_BORROW = MQTT_TOPIC_COMMAND;
-export const MQTT_TOPIC_COMMAND_RETURN = MQTT_TOPIC_COMMAND;
-export const MQTT_TOPIC_EVENT_BORROWED = MQTT_TOPIC_RESPONSE;
-export const MQTT_TOPIC_EVENT_RETURNED = MQTT_TOPIC_RESPONSE;
-export const MQTT_TOPIC_UNLOCK = MQTT_TOPIC_COMMAND;
-export const MQTT_TOPIC_REMOVED = MQTT_TOPIC_RESPONSE;
-export const MQTT_TOPIC_STATUS = 'astrix-umbrella/cabinet/status';
+export type CabinetAction = 'BORROW' | 'RETURN';
 
 export interface CabinetCommand {
-  action: 'BORROW' | 'RETURN';
+  action: CabinetAction;
   slot: number;
 }
 
 export interface CabinetResponse {
-  action: 'BORROW' | 'RETURN';
+  action: CabinetAction;
   slot: number;
   status: 'SUCCESS' | 'FAIL';
   reason?: 'NOT_TAKEN' | 'NO_UMBRELLA' | 'WRONG_UMBRELLA';
   message: string;
 }
 
+export type CabinetResult =
+  | { ok: true; response: CabinetResponse }
+  | { ok: false; error: 'CONNECT_FAILED' | 'TIMEOUT'; commandSent: boolean };
+
 /**
  * Resolves the optimal broker URL for web and serverless environments.
  * Upgrades raw TCP (1883) to WebSockets SSL (8884) to pass through cloud firewalls.
  */
-function getEffectiveBrokerUrl(): string {
+export function getEffectiveBrokerUrl(): string {
   const envUrl = process.env.HIVEMQ_BROKER_URL?.trim();
-  if (!envUrl || envUrl === 'mqtt://broker.hivemq.com:1883' || envUrl.includes('broker.hivemq.com:1883')) {
+  if (!envUrl || envUrl.includes('broker.hivemq.com:1883')) {
     return 'wss://broker.hivemq.com:8884/mqtt';
   }
   return envUrl;
 }
 
+export function getBrokerOptions(clientPrefix: string): mqtt.IClientOptions {
+  const options: mqtt.IClientOptions = {
+    clientId: `${clientPrefix}-${Math.random().toString(16).substring(2, 8)}`,
+    connectTimeout: 8000,
+    clean: true,
+    reconnectPeriod: 0,
+  };
+  if (process.env.HIVEMQ_USERNAME) options.username = process.env.HIVEMQ_USERNAME;
+  if (process.env.HIVEMQ_PASSWORD) options.password = process.env.HIVEMQ_PASSWORD;
+  return options;
+}
+
 /**
- * Universal MQTT Publisher to HiveMQ Cloud / Public Broker (QoS 0)
- * Uses WebSockets SSL on port 8884 to ensure 100% cloud & Vercel delivery.
- * Includes automatic 2-attempt retry with socket flushing.
+ * One connection attempt: subscribe to the response topic, send the command,
+ * then wait for the cabinet's response for this action and slot.
  */
-async function sendMqttMessage(
-  topic: string,
-  payload: any
-): Promise<{ success: boolean; simulated?: boolean; error?: string }> {
-  const brokerUrl = getEffectiveBrokerUrl();
-  const username = process.env.HIVEMQ_USERNAME;
-  const password = process.env.HIVEMQ_PASSWORD;
+function attemptCabinetCommand(command: CabinetCommand, timeoutMs: number): Promise<CabinetResult> {
+  return new Promise((resolve) => {
+    const client = mqtt.connect(getEffectiveBrokerUrl(), getBrokerOptions('astrix-web'));
+    let commandSent = false;
+    let finished = false;
 
-  const payloadString = JSON.stringify(payload);
+    const finish = (result: CabinetResult) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try {
+        client.end(true);
+      } catch {}
+      resolve(result);
+    };
 
-  console.log(`\n======================================================`);
-  console.log(`📡 [MQTT PUBLISH] Topic: ${topic}`);
-  console.log(`🔌 Broker: ${brokerUrl}`);
-  console.log(`📦 Payload: ${payloadString}`);
-  console.log(`======================================================\n`);
+    const timer = setTimeout(() => {
+      finish({ ok: false, error: commandSent ? 'TIMEOUT' : 'CONNECT_FAILED', commandSent });
+    }, timeoutMs);
 
-  // If broker URL is placeholder or not configured, simulate
-  if (!brokerUrl || brokerUrl.includes('your-cluster-id')) {
-    console.log('ℹ️ [HiveMQ] Local simulation mode active. Command logged successfully.');
-    return { success: true, simulated: true };
-  }
-
-  // Attempt up to 2 times for rock-solid reliability across transient network hiccups
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const result = await new Promise<{ success: boolean; error?: string }>((resolve) => {
-        let client: mqtt.MqttClient | null = null;
-        let resolved = false;
-
-        const timeout = setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            console.warn(`⚠️ [HiveMQ] Attempt ${attempt}: Connection timed out after 9000ms.`);
-            try { client?.end(true); } catch {}
-            resolve({ success: false, error: 'Connection to HiveMQ timed out.' });
-          }
-        }, 9000);
-
-        try {
-          const options: mqtt.IClientOptions = {
-            clientId: `astrix-web-${Math.random().toString(16).substring(2, 8)}`,
-            connectTimeout: 8000,
-            clean: true,
-          };
-
-          if (username) options.username = username;
-          if (password) options.password = password;
-
-          client = mqtt.connect(brokerUrl, options);
-
-          client.on('connect', () => {
-            // Hardware spec requires QoS 0
-            client?.publish(topic, payloadString, { qos: 0 }, (err) => {
-              clearTimeout(timeout);
-              if (!resolved) {
-                resolved = true;
-                if (err) {
-                  console.warn(`⚠️ [HiveMQ] Attempt ${attempt} publish error:`, err.message);
-                  try { client?.end(true); } catch {}
-                  resolve({ success: false, error: err.message });
-                } else {
-                  console.log('✅ [HiveMQ] Command queued to broker. Flushing socket...');
-                  setTimeout(() => {
-                    try {
-                      client?.end(false, () => {
-                        console.log('✅ [HiveMQ] Socket flushed and closed cleanly.');
-                      });
-                    } catch {}
-                  }, 200);
-                  resolve({ success: true });
-                }
-              }
-            });
-          });
-
-          client.on('error', (err) => {
-            clearTimeout(timeout);
-            if (!resolved) {
-              resolved = true;
-              console.warn(`⚠️ [HiveMQ] Attempt ${attempt} connection error:`, err.message);
-              try { client?.end(true); } catch {}
-              resolve({ success: false, error: err.message });
-            }
-          });
-        } catch (e: any) {
-          clearTimeout(timeout);
-          if (!resolved) {
-            resolved = true;
-            console.warn(`⚠️ [HiveMQ] Attempt ${attempt} exception:`, e.message);
-            resolve({ success: false, error: e.message });
-          }
+    client.on('connect', () => {
+      // Subscribe BEFORE publishing so a fast cabinet response is never missed
+      client.subscribe(MQTT_TOPIC_RESPONSE, { qos: 0 }, (subErr) => {
+        if (subErr) {
+          console.warn('⚠️ [HiveMQ] Subscribe error:', subErr.message);
+          finish({ ok: false, error: 'CONNECT_FAILED', commandSent: false });
+          return;
         }
+
+        console.log(`📡 [MQTT PUBLISH] ${MQTT_TOPIC_COMMAND}: ${JSON.stringify(command)}`);
+        client.publish(MQTT_TOPIC_COMMAND, JSON.stringify(command), { qos: 0 }, (pubErr) => {
+          if (pubErr) {
+            console.warn('⚠️ [HiveMQ] Publish error:', pubErr.message);
+            finish({ ok: false, error: 'CONNECT_FAILED', commandSent: false });
+            return;
+          }
+          commandSent = true;
+        });
       });
+    });
 
-      if (result.success) {
-        return { success: true, simulated: false };
+    client.on('message', (_topic, message) => {
+      try {
+        const data = JSON.parse(message.toString()) as CabinetResponse;
+        if (data.action === command.action && Number(data.slot) === command.slot) {
+          console.log(`📨 [Cabinet Response] ${message.toString()}`);
+          finish({ ok: true, response: data });
+        }
+      } catch {
+        // Ignore anything that is not a cabinet JSON response
       }
+    });
 
-      console.warn(`⚠️ [HiveMQ] Attempt ${attempt} did not succeed (${result.error}). Retrying...`);
-      if (attempt === 1) {
-        await new Promise((r) => setTimeout(r, 400));
-      }
-    } catch (e: any) {
-      console.warn(`⚠️ [HiveMQ] Outer attempt ${attempt} error:`, e.message);
-    }
-  }
-
-  return {
-    success: false,
-    error: 'Failed to transmit MQTT command to HiveMQ broker after 2 attempts.',
-  };
+    client.on('error', (err) => {
+      console.warn('⚠️ [HiveMQ] Connection error:', err.message);
+      if (!commandSent) finish({ ok: false, error: 'CONNECT_FAILED', commandSent: false });
+    });
+  });
 }
 
 /**
- * Publish Borrow Trigger Command to ESP32 Cabinet
- * Topic: astrix-umbrella/cabinet/command
- * Payload: {"action": "BORROW", "slot": slot}
+ * Sends a BORROW/RETURN command to the cabinet and waits for its response
+ * (astrix-umbrella/cabinet/response). A borrow/return cycle on the cabinet
+ * takes up to ~20 s, so the default wait is 45 s.
+ * Retries once only if the command never reached the broker.
  */
-export async function publishBorrowCommand(slot: number, indexNo?: string) {
-  const payload: CabinetCommand = {
-    action: 'BORROW',
-    slot,
-  };
-  return sendMqttMessage(MQTT_TOPIC_COMMAND, payload);
-}
-
-/**
- * Publish Return Trigger Command to ESP32 Cabinet
- * Topic: astrix-umbrella/cabinet/command
- * Payload: {"action": "RETURN", "slot": slot}
- */
-export async function publishReturnCommand(slot: number, indexNo?: string) {
-  const payload: CabinetCommand = {
-    action: 'RETURN',
-    slot,
-  };
-  return sendMqttMessage(MQTT_TOPIC_COMMAND, payload);
-}
-
-/**
- * Universal unlock command (backward compatibility)
- */
-export async function publishUnlockCommand(
-  action: 'BORROW' | 'RETURN' | string,
+export async function runCabinetCommand(
+  action: CabinetAction,
   slot: number,
-  indexNo?: string
-) {
-  if (action === 'RETURN' || action === 'RETURN_UNLOCK') {
-    return publishReturnCommand(slot, indexNo);
+  timeoutMs = 45000
+): Promise<CabinetResult> {
+  const command: CabinetCommand = { action, slot };
+
+  const first = await attemptCabinetCommand(command, timeoutMs);
+  if (first.ok || first.commandSent) return first;
+
+  console.warn('⚠️ [HiveMQ] Command was not delivered. Retrying once...');
+  await new Promise((r) => setTimeout(r, 400));
+  return attemptCabinetCommand(command, timeoutMs);
+}
+
+/**
+ * Student-facing message when the cabinet could not be reached or did not answer
+ */
+export function cabinetErrorMessage(error: 'CONNECT_FAILED' | 'TIMEOUT', action: CabinetAction): string {
+  if (error === 'CONNECT_FAILED') {
+    return 'Could not reach the umbrella cabinet. Please try again in a moment.';
   }
-  return publishBorrowCommand(slot, indexNo);
+  return action === 'BORROW'
+    ? 'The cabinet did not respond in time. If the slot opened and you took the umbrella, please contact the station team.'
+    : 'The cabinet did not respond in time. If you put the umbrella back, please contact the station team.';
 }

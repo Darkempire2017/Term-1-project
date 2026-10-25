@@ -1,87 +1,148 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { publishReturnCommand } from '@/lib/mqtt';
+import { cabinetErrorMessage, runCabinetCommand } from '@/lib/mqtt';
 import { sendReturnReceiptEmail } from '@/lib/email';
+import { getSessionIndex } from '@/lib/session';
+import { isDevIndex } from '@/lib/dev';
+import { findOpenLoan, formatLoanDuration } from '@/lib/loans';
+import { rateLimit } from '@/lib/rate-limit';
 
+// The cabinet takes up to ~20 s to report the result, so allow the route to wait
+export const maxDuration = 60;
+
+/**
+ * Return: open the home slot of the student's umbrella, send RETURN to the
+ * cabinet, wait for its response, and only then close the loan.
+ */
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { index_no, slot: requestedSlot } = body;
+    const indexNo = await getSessionIndex();
+    if (!indexNo) {
+      return NextResponse.json({ success: false, message: 'Please sign in to return an umbrella.' }, { status: 401 });
+    }
 
-    const cleanIndex = index_no?.trim().toUpperCase();
-    if (!cleanIndex) {
+    if (!rateLimit(`return:${indexNo}`, 5, 10 * 60 * 1000)) {
       return NextResponse.json(
-        { success: false, message: 'Student Index Number is required.' },
+        { success: false, message: 'Too many return attempts. Please wait a few minutes.' },
+        { status: 429 }
+      );
+    }
+
+    const body = await request.json().catch(() => ({}));
+
+    // ------------------------------------------------------------------
+    // Developer accounts: test RETURN on any slot, no loan is touched
+    // ------------------------------------------------------------------
+    if (isDevIndex(indexNo)) {
+      const slot = Number(body?.slot);
+      if (!Number.isInteger(slot) || slot < 1 || slot > 4) {
+        return NextResponse.json({ success: false, message: 'Choose a slot from 1 to 4.' }, { status: 400 });
+      }
+
+      const result = await runCabinetCommand('RETURN', slot);
+      if (!result.ok) {
+        return NextResponse.json(
+          { success: false, message: cabinetErrorMessage(result.error, 'RETURN'), slot },
+          { status: result.error === 'TIMEOUT' ? 504 : 502 }
+        );
+      }
+      return NextResponse.json({
+        success: result.response.status === 'SUCCESS',
+        message: result.response.message,
+        reason: result.response.reason,
+        slot,
+        dev: true,
+      });
+    }
+
+    // ------------------------------------------------------------------
+    // Students: the slot comes from the loan, never from the request
+    // ------------------------------------------------------------------
+    const loan = await findOpenLoan(indexNo);
+    if (!loan) {
+      return NextResponse.json(
+        { success: false, message: 'No active umbrella loan found for your account.' },
         { status: 400 }
       );
     }
 
-    const isDevAccount = cleanIndex === 'DEV001';
-    let targetSlot = requestedSlot;
-    let umbrellaId: string = 'DEV-UMBRELLA';
+    const { data: homeSlot } = await supabaseAdmin
+      .from('umbrellas')
+      .select('slot, availability')
+      .eq('umbrella_id', loan.umbrella_id)
+      .maybeSingle();
 
-    // 1. If not DEV001, find active borrow record in Supabase
-    if (!isDevAccount) {
-      const { data: activeLoan } = await supabaseAdmin
-        .from('borrow_records')
-        .select('*')
-        .eq('index_no', cleanIndex)
-        .eq('status', 'ACTIVE')
-        .order('borrowed_time', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!activeLoan) {
-        return NextResponse.json(
-          { success: false, message: 'No active umbrella loan found for your account.' },
-          { status: 400 }
-        );
-      }
-
-      if (!targetSlot) {
-        const { data: userSlot } = await supabaseAdmin
-          .from('umbrellas')
-          .select('slot')
-          .eq('borrowed_user', cleanIndex)
-          .maybeSingle();
-
-        targetSlot = userSlot?.slot || 1;
-      }
-      umbrellaId = activeLoan.umbrella_id;
-    } else {
-      // DEV001 can test RETURN on any physical slot directly (1-4)
-      if (!targetSlot || targetSlot < 1 || targetSlot > 4) {
-        targetSlot = 1;
-      }
+    if (!homeSlot) {
+      console.error(`❌ [API/Return] No slot found for umbrella ${loan.umbrella_id}`);
+      return NextResponse.json(
+        { success: false, message: 'Could not find the slot for your umbrella. Please contact the station team.' },
+        { status: 409 }
+      );
     }
 
-    // 2. Publish HiveMQ MQTT return command to cabinet (Topic: astrix-umbrella/cabinet/command)
-    const mqttResult = await publishReturnCommand(targetSlot);
-
-    if (!mqttResult.success) {
-      console.warn('⚠️ [API/Return] MQTT command failed to reach broker:', mqttResult.error);
+    if (homeSlot.availability) {
       return NextResponse.json(
-        {
-          success: false,
-          message: `Cabinet communication error: ${mqttResult.error || 'Failed to reach MQTT broker'}. Please try again.`,
-          mqtt: mqttResult,
-        },
-        { status: 502 }
+        { success: false, message: `Slot #${homeSlot.slot} already shows an umbrella. Please contact the station team.` },
+        { status: 409 }
       );
+    }
+
+    const result = await runCabinetCommand('RETURN', homeSlot.slot);
+
+    if (!result.ok) {
+      return NextResponse.json(
+        { success: false, message: cabinetErrorMessage(result.error, 'RETURN'), slot: homeSlot.slot },
+        { status: result.error === 'TIMEOUT' ? 504 : 502 }
+      );
+    }
+
+    // Case 4 / Case 5: loan stays open
+    if (result.response.status !== 'SUCCESS') {
+      return NextResponse.json({
+        success: false,
+        message: result.response.message,
+        reason: result.response.reason,
+        slot: homeSlot.slot,
+      });
+    }
+
+    // Case 3: right umbrella is back — close the loan and free the slot
+    const now = new Date();
+    const durationStr = formatLoanDuration(loan.borrowed_time);
+
+    await supabaseAdmin
+      .from('borrow_records')
+      .update({ status: 'RETURNED', returned_time: now.toISOString() })
+      .eq('record_id', loan.record_id);
+
+    await supabaseAdmin
+      .from('umbrellas')
+      .update({ availability: true, borrowed_user: null })
+      .eq('slot', homeSlot.slot);
+
+    // Return receipt email
+    try {
+      const { data: user } = await supabaseAdmin
+        .from('users')
+        .select('email, username')
+        .eq('index_no', indexNo)
+        .maybeSingle();
+      if (user?.email) {
+        await sendReturnReceiptEmail(user.email, user.username || 'Student', homeSlot.slot, loan.umbrella_id, durationStr);
+      }
+    } catch (e) {
+      console.warn('⚠️ [API/Return] Receipt email warning:', e);
     }
 
     return NextResponse.json({
       success: true,
-      message: `Slot #${targetSlot} unlocked for return. Please insert the umbrella into Slot #${targetSlot}.`,
-      slot: targetSlot,
-      umbrella_id: umbrellaId,
-      mqtt: mqttResult,
+      message: result.response.message,
+      slot: homeSlot.slot,
+      umbrella_id: loan.umbrella_id,
+      duration: durationStr,
     });
   } catch (error: any) {
     console.error('❌ [API/Return] Error:', error);
-    return NextResponse.json(
-      { success: false, message: error.message || 'Return request failed.' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, message: 'Return request failed. Please try again.' }, { status: 500 });
   }
 }

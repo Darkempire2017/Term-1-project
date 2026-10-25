@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
+import { clientIp, rateLimit } from '@/lib/rate-limit';
 
 export async function POST(request: Request) {
   try {
@@ -7,6 +8,13 @@ export async function POST(request: Request) {
     const { index_no } = body;
 
     const cleanIndex = index_no?.trim().toUpperCase();
+
+    if (!rateLimit(`check-index:ip:${clientIp(request)}`, 30, 15 * 60 * 1000)) {
+      return NextResponse.json(
+        { success: false, message: 'Too many requests. Please wait a few minutes and try again.' },
+        { status: 429 }
+      );
+    }
 
     if (!cleanIndex || !/^(DEV[0-9]{3}|[0-9]{6}[A-Z])$/i.test(cleanIndex)) {
       return NextResponse.json(
@@ -47,7 +55,7 @@ export async function POST(request: Request) {
   } catch (error: any) {
     console.error('❌ [API/CheckIndex] Error:', error);
     return NextResponse.json(
-      { success: false, message: error.message || 'Failed to check index.' },
+      { success: false, message: 'Failed to check index. Please try again.' },
       { status: 500 }
     );
   }

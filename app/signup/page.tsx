@@ -12,7 +12,6 @@ import {
   Upload,
   ArrowRight,
   UserCheck,
-  Keyboard,
 } from 'lucide-react';
 
 // The UoM student ID barcode contains only the index number: 6 digits + a letter
@@ -54,8 +53,6 @@ export default function BarcodeScanPage() {
   const [isChecking, setIsChecking] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
-  const [showManualEntry, setShowManualEntry] = useState(false);
-  const [manualIndex, setManualIndex] = useState('');
   const [lastRawScan, setLastRawScan] = useState<string | null>(null); // dev builds only
 
   // Stop the camera if it is running (safe to call at any time)
@@ -71,7 +68,7 @@ export default function BarcodeScanPage() {
     setIsTorchOn(false);
   }, []);
 
-  // An index number was read (or typed): check it and continue to step 2
+  // An index number was read from the ID: check it and continue to step 2
   const acceptIndex = async (index_no: string) => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -216,7 +213,7 @@ export default function BarcodeScanPage() {
     } catch (err: any) {
       console.warn('Camera start error:', err);
       setCameraError(
-        'Unable to access camera. Please allow camera permissions, upload a photo of your ID barcode, or type your index number.'
+        'Unable to access camera. Please allow camera permissions or upload a photo of your ID barcode.'
       );
       setIsScanning(false);
     } finally {
@@ -266,23 +263,12 @@ export default function BarcodeScanPage() {
       await acceptIndex(index_no);
     } catch (err) {
       setValidationError(
-        'Could not read a barcode from that photo. Try a sharper, well-lit photo, or type your index number.'
+        'Could not read a barcode from that photo. Try a sharper, well-lit photo of your ID barcode.'
       );
     } finally {
       setIsChecking(false);
       e.target.value = '';
     }
-  };
-
-  // Typed index number (for damaged cards or devices without a camera)
-  const handleManualSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const index_no = parseIndex(manualIndex);
-    if (!index_no) {
-      setValidationError('An index number is 6 digits followed by a letter, for example 250373T.');
-      return;
-    }
-    await acceptIndex(index_no);
   };
 
   // Start the camera on page load; stop it when leaving
@@ -569,41 +555,6 @@ export default function BarcodeScanPage() {
             <span>Upload Photo Instead</span>
           </button>
         </div>
-
-        {/* Typed index number (last option) */}
-        {showManualEntry ? (
-          <form onSubmit={handleManualSubmit} className="flex items-center gap-2 px-1">
-            <input
-              id="manual-index"
-              type="text"
-              inputMode="text"
-              autoCapitalize="characters"
-              autoComplete="off"
-              maxLength={7}
-              placeholder="e.g. 250373T"
-              value={manualIndex}
-              onChange={(e) => setManualIndex(e.target.value.toUpperCase())}
-              aria-label="Index number"
-              className="flex-1 px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-sky-400"
-            />
-            <button
-              type="submit"
-              disabled={isChecking}
-              className="py-2 px-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl font-bold text-xs transition disabled:opacity-50"
-            >
-              Continue
-            </button>
-          </form>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowManualEntry(true)}
-            className="text-[11px] font-bold text-slate-500 hover:text-sky-700 underline inline-flex items-center space-x-1 px-1"
-          >
-            <Keyboard className="w-3 h-3" />
-            <span>Can&apos;t scan? Type your index number</span>
-          </button>
-        )}
       </div>
 
       {/* Footer */}

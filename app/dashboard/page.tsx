@@ -213,12 +213,102 @@ export default function DashboardPage() {
     }
   };
 
-  // Borrow Umbrella (developer accounts can pick the slot)
-  const handleBorrow = async (requestedSlot?: number) => {
-    if (isDevAccount && typeof requestedSlot === 'number') {
-      await runCabinetAction('borrow', requestedSlot, { slot: requestedSlot });
-      return;
+  // Per-slot busy state for independent, non-blocking developer actions
+  const [devSlotBusy, setDevSlotBusy] = useState<Record<number, 'borrow' | 'return' | 'open' | 'close' | null>>({});
+
+  // Developer direct non-blocking borrow on any slot
+  const handleDevBorrow = async (slot: number) => {
+    setDevSlotBusy((prev) => ({ ...prev, [slot]: 'borrow' }));
+    setNotification({
+      type: 'info',
+      text: `🔓 [Slot #${slot}] Sending Borrow command to cabinet…`,
+    });
+
+    try {
+      const res = await fetch('/api/borrow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setNotification({ type: 'success', text: `✅ [Slot #${slot}] ${json.message}` });
+      } else {
+        triggerErrorGlow();
+        setNotification({ type: 'error', text: `⚠️ [Slot #${slot}] ${json.message || 'Borrow failed.'}` });
+      }
+    } catch {
+      triggerErrorGlow();
+      setNotification({ type: 'error', text: `Could not connect to station for Slot #${slot}.` });
+    } finally {
+      setDevSlotBusy((prev) => ({ ...prev, [slot]: null }));
+      refreshStationData();
     }
+  };
+
+  // Developer direct non-blocking return on any slot
+  const handleDevReturn = async (slot: number) => {
+    setDevSlotBusy((prev) => ({ ...prev, [slot]: 'return' }));
+    setNotification({
+      type: 'info',
+      text: `🔒 [Slot #${slot}] Sending Return command to cabinet…`,
+    });
+
+    try {
+      const res = await fetch('/api/return', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setNotification({ type: 'success', text: `✅ [Slot #${slot}] ${json.message}` });
+      } else {
+        triggerErrorGlow();
+        setNotification({ type: 'error', text: `⚠️ [Slot #${slot}] ${json.message || 'Return failed.'}` });
+      }
+    } catch {
+      triggerErrorGlow();
+      setNotification({ type: 'error', text: `Could not connect to station for Slot #${slot}.` });
+    } finally {
+      setDevSlotBusy((prev) => ({ ...prev, [slot]: null }));
+      refreshStationData();
+    }
+  };
+
+  // Developer direct lock Open / Close
+  const handleDevLock = async (slot: number, action: 'OPEN' | 'CLOSE') => {
+    const key = action === 'OPEN' ? 'open' : 'close';
+    setDevSlotBusy((prev) => ({ ...prev, [slot]: key }));
+    setNotification({
+      type: 'info',
+      text: `⚡ [Slot #${slot}] Sending ${action} lock command…`,
+    });
+
+    try {
+      const res = await fetch('/api/dev/lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot, action }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setNotification({ type: 'success', text: `✅ [Slot #${slot}] ${json.message}` });
+      } else {
+        triggerErrorGlow();
+        setNotification({ type: 'error', text: `⚠️ [Slot #${slot}] ${json.message || 'Lock command failed.'}` });
+      }
+    } catch {
+      triggerErrorGlow();
+      setNotification({ type: 'error', text: `Could not connect to station for Slot #${slot}.` });
+    } finally {
+      setDevSlotBusy((prev) => ({ ...prev, [slot]: null }));
+      refreshStationData();
+    }
+  };
+
+  // Borrow Umbrella (Standard Student View)
+  const handleBorrow = async () => {
     if (!nextAvailableSlot) {
       triggerErrorGlow();
       setNotification({ type: 'error', text: 'No umbrellas currently available at this station.' });
@@ -231,11 +321,6 @@ export default function DashboardPage() {
   const handleReturn = async () => {
     if (!activeLoan) return;
     await runCabinetAction('return', activeLoan.slot, {});
-  };
-
-  // Developer Direct Slot Return Command (any slot 1-4)
-  const handleDevReturn = async (slot: number) => {
-    await runCabinetAction('return', slot, { slot });
   };
 
   // Interactive Test State Switcher
@@ -484,28 +569,70 @@ export default function DashboardPage() {
                       </span>
                     </div>
 
-                    {/* DUAL ACTION BUTTONS: BORROW & RETURN */}
+                    {/* 4 HARDWARE ACTION BUTTONS: BORROW, RETURN, OPEN, CLOSE (Non-blocking) */}
                     <div className="grid grid-cols-2 gap-1.5 pt-1">
+                      {/* 1. Borrow */}
                       <button
                         type="button"
-                        onClick={() => handleBorrow(s.slot)}
-                        disabled={actionInProgress !== null || unlockCountdown !== null}
-                        className="py-2 px-1 text-xs font-black rounded-xl bg-sky-600 hover:bg-sky-700 text-white transition shadow-sm active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1"
+                        onClick={() => handleDevBorrow(s.slot)}
+                        disabled={devSlotBusy[s.slot] === 'borrow'}
+                        className="py-2 px-1 text-[11px] font-black rounded-xl bg-sky-600 hover:bg-sky-700 text-white transition shadow-sm active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1"
                         title={`Send Borrow command for Slot ${s.slot}`}
                       >
-                        <Unlock className="w-3 h-3" />
+                        {devSlotBusy[s.slot] === 'borrow' ? (
+                          <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <Unlock className="w-3 h-3" />
+                        )}
                         <span>Borrow</span>
                       </button>
 
+                      {/* 2. Return */}
                       <button
                         type="button"
                         onClick={() => handleDevReturn(s.slot)}
-                        disabled={actionInProgress !== null || unlockCountdown !== null}
-                        className="py-2 px-1 text-xs font-black rounded-xl bg-amber-600 hover:bg-amber-700 text-white transition shadow-sm active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1"
+                        disabled={devSlotBusy[s.slot] === 'return'}
+                        className="py-2 px-1 text-[11px] font-black rounded-xl bg-amber-600 hover:bg-amber-700 text-white transition shadow-sm active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1"
                         title={`Send Return command for Slot ${s.slot}`}
                       >
-                        <Lock className="w-3 h-3" />
+                        {devSlotBusy[s.slot] === 'return' ? (
+                          <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <Lock className="w-3 h-3" />
+                        )}
                         <span>Return</span>
+                      </button>
+
+                      {/* 3. Open Lock */}
+                      <button
+                        type="button"
+                        onClick={() => handleDevLock(s.slot, 'OPEN')}
+                        disabled={devSlotBusy[s.slot] === 'open'}
+                        className="py-2 px-1 text-[11px] font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-sm active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1"
+                        title={`Directly open lock on Slot ${s.slot}`}
+                      >
+                        {devSlotBusy[s.slot] === 'open' ? (
+                          <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <Unlock className="w-3 h-3" />
+                        )}
+                        <span>Open</span>
+                      </button>
+
+                      {/* 4. Close Lock */}
+                      <button
+                        type="button"
+                        onClick={() => handleDevLock(s.slot, 'CLOSE')}
+                        disabled={devSlotBusy[s.slot] === 'close'}
+                        className="py-2 px-1 text-[11px] font-black rounded-xl bg-slate-700 hover:bg-slate-800 text-white transition shadow-sm active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1"
+                        title={`Directly close lock on Slot ${s.slot}`}
+                      >
+                        {devSlotBusy[s.slot] === 'close' ? (
+                          <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <Lock className="w-3 h-3" />
+                        )}
+                        <span>Close</span>
                       </button>
                     </div>
                   </div>

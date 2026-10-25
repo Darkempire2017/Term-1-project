@@ -81,6 +81,21 @@ client.on('message', (topic, message) => {
     console.log(`⚡ Servo/Solenoid lock releasing on Slot #${slot}...`);
     console.log('⚡ ======================================================\n');
 
+    if (action === 'OPEN' || action === 'CLOSE') {
+      const isOpening = action === 'OPEN';
+      console.log(`⚡ [DIRECT LOCK] Slot #${slot} servo set to ${isOpening ? 'OPEN (0°)' : 'CLOSED (180°)'}`);
+      const payload = {
+        action: action,
+        slot: slot,
+        status: 'SUCCESS',
+        message: `Slot #${slot} lock ${isOpening ? 'opened' : 'closed'}.`,
+      };
+      client.publish(TOPIC_RESPONSE, JSON.stringify(payload), { qos: 0 });
+      console.log(`✅ [SENT DIRECT LOCK RESPONSE] on ${TOPIC_RESPONSE}:`, payload);
+      printMenu();
+      return;
+    }
+
     printMenu();
   } catch (e) {
     console.error('❌ Error parsing command:', e.message);

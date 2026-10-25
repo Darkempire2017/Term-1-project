@@ -438,16 +438,33 @@ void publishResult(const char* action, int slotNumber, const Result &res) {
 }
 
 // Check the action and slot, then start the job.
-// Invalid commands are only logged here - the response topic only carries the 5 standard responses.
+// Invalid commands are only logged here - the response topic only carries standard responses.
 void runAction(String action, int slotNumber) {
   action.toUpperCase();
 
-  if (action != "BORROW" && action != "RETURN") {
-    Serial.println("Ignored: action must be BORROW or RETURN.");
-    return;
-  }
   if (slotNumber < 1 || slotNumber > NUM_SLOTS) {
     Serial.println("Ignored: slot must be 1, 2, 3 or 4.");
+    return;
+  }
+
+  // Developer Direct Lock Controls
+  if (action == "OPEN") {
+    targetPosition[slotNumber - 1] = LOCK_OPEN;
+    Serial.printf("=== Developer Command: Opened Lock on Slot %d ===\n", slotNumber);
+    Result res = { true, "", "Lock opened." };
+    publishResult("OPEN", slotNumber, res);
+    return;
+  }
+  if (action == "CLOSE") {
+    targetPosition[slotNumber - 1] = LOCK_CLOSED;
+    Serial.printf("=== Developer Command: Closed Lock on Slot %d ===\n", slotNumber);
+    Result res = { true, "", "Lock closed." };
+    publishResult("CLOSE", slotNumber, res);
+    return;
+  }
+
+  if (action != "BORROW" && action != "RETURN") {
+    Serial.println("Ignored: action must be BORROW, RETURN, OPEN, or CLOSE.");
     return;
   }
 

@@ -9,7 +9,7 @@ export const MQTT_TOPIC_COMMAND = 'astrix-umbrella/cabinet/command';
 // 2. ESP32 ➔ Server Response Topic
 export const MQTT_TOPIC_RESPONSE = 'astrix-umbrella/cabinet/response';
 
-export type CabinetAction = 'BORROW' | 'RETURN';
+export type CabinetAction = 'BORROW' | 'RETURN' | 'OPEN' | 'CLOSE';
 
 export interface CabinetCommand {
   action: CabinetAction;
@@ -147,6 +147,8 @@ export function cabinetErrorMessage(error: 'CONNECT_FAILED' | 'TIMEOUT', action:
   if (error === 'CONNECT_FAILED') {
     return 'Could not reach the umbrella cabinet. Please try again in a moment.';
   }
+  if (action === 'OPEN') return 'The cabinet did not confirm lock opening in time.';
+  if (action === 'CLOSE') return 'The cabinet did not confirm lock closing in time.';
   return action === 'BORROW'
     ? 'The cabinet did not respond in time. If the slot opened and you took the umbrella, please contact the station team.'
     : 'The cabinet did not respond in time. If you put the umbrella back, please contact the station team.';

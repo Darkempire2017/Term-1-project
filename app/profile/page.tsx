@@ -139,9 +139,6 @@ export default function ProfilePage() {
                 <span className="px-2.5 py-0.5 rounded-lg bg-slate-100 text-slate-800 font-mono text-xs font-bold border border-slate-200">
                   {profile.index_no}
                 </span>
-                <span className="text-[11px] text-slate-500 font-medium truncate">
-                  UoM Campus
-                </span>
               </div>
             </div>
           </div>

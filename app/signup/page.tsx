@@ -132,112 +132,127 @@ export default function BarcodeScanPage() {
     if (!index_no) {
       lastReadRef.current = { index: '', count: 0 };
       setValidationError(
-        'Invalid barcode. Please point your camera directly at the barcode on your University Student ID.'
+        'Incorrect barcode. Please scan the front side of your University ID card.'
       );
       return;
     }
 
     // Accept only after the same index is read CONFIRM_READS times in a row
-    const last = lastReadRef.current;
-    lastReadRef.current = last.index === index_no ? { index: index_no, count: last.count + 1 } : { index: index_no, count: 1 };
+    if (lastReadRef.current.index === index_no) {
+      lastReadRef.current.count += 1;
+    } else {
+      lastReadRef.current = { index: index_no, count: 1 };
+    }
+
     if (lastReadRef.current.count >= CONFIRM_READS) {
-      lastReadRef.current = { index: '', count: 0 };
       acceptIndex(index_no);
     }
   };
 
   // Start the live camera scanner
   const startScanner = useCallback(async () => {
-    if (startingRef.current || unmountedRef.current) return;
+    if (startingRef.current || busyRef.current || unmountedRef.current) return;
     startingRef.current = true;
-    busyRef.current = false;
-    lastReadRef.current = { index: '', count: 0 };
     setCameraError(null);
     setValidationError(null);
     setExistingUserError(null);
-    setHasTorch(false);
-    setIsTorchOn(false);
+    lastReadRef.current = { index: '', count: 0 };
 
     try {
       const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
-
-      await stopScanner();
       if (unmountedRef.current) return;
 
-      if (!scannerRef.current) {
-        scannerRef.current = new Html5Qrcode('astrix-barcode-reader', {
-          // Only the 1D formats that can hold letters (the index ends with a letter)
-          formatsToSupport: [
-            Html5QrcodeSupportedFormats.CODE_128,
-            Html5QrcodeSupportedFormats.CODE_39,
-            Html5QrcodeSupportedFormats.CODE_93,
-          ],
-          // Use the phone's built-in barcode reader when available (fast and accurate
-          // on Android Chrome); other browsers fall back to the library's own decoder
-          experimentalFeatures: { useBarCodeDetectorIfSupported: true },
-          verbose: false,
-        });
-      }
-
-      await scannerRef.current.start(
-        { facingMode: 'environment' },
-        {
-          fps: 12,
-          // No qrbox: the whole picture is scanned, so a barcode anywhere in view is read.
-          // The frame drawn on screen is only a guide.
-          videoConstraints: {
-            facingMode: 'environment',
-            // A sharp picture matters for the thin bars of a 1D barcode
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
-          },
-        },
-        handleLiveDecode,
-        undefined
-      );
-
-      if (unmountedRef.current) {
-        await stopScanner();
+      const element = document.getElementById('astrix-barcode-reader');
+      if (!element) {
+        startingRef.current = false;
         return;
       }
+
+      // Stop any previous instance before creating a new one
+      if (scannerRef.current) {
+        try {
+          if (scannerRef.current.isScanning) await scannerRef.current.stop();
+          scannerRef.current.clear();
+        } catch {}
+      }
+
+      // Read Code 39 (UoM ID standard) and 128; fall back to all formats on error
+      let formatsToSupport: any[] = [
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.CODE_128,
+      ];
+
+      let scanner: any;
+      try {
+        scanner = new Html5Qrcode('astrix-barcode-reader', {
+          formatsToSupport,
+          verbose: false,
+        });
+      } catch {
+        scanner = new Html5Qrcode('astrix-barcode-reader', { verbose: false });
+      }
+
+      scannerRef.current = scanner;
+
+      // Scan the full camera picture (scanning the whole frame is faster and more forgiving)
+      const config = {
+        fps: 20,
+        videoConstraints: {
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      };
+
+      await scanner.start({ facingMode: 'environment' }, config, handleLiveDecode, () => {});
+
+      if (unmountedRef.current) {
+        try {
+          await scanner.stop();
+        } catch {}
+        return;
+      }
+
       setIsScanning(true);
 
       // Check if torch/flashlight is supported
       try {
-        const capabilities = scannerRef.current.getRunningTrackCapabilities();
-        if (capabilities && 'torch' in capabilities) {
-          setHasTorch(true);
-        }
-      } catch {}
+        const capabilities = scanner.getRunningTrackCapabilities();
+        setHasTorch(Boolean(capabilities?.torch));
+      } catch {
+        setHasTorch(false);
+      }
     } catch (err: any) {
       console.warn('Camera start error:', err);
-      setCameraError(
-        'Unable to access camera. Please allow camera permissions or upload a photo of your ID barcode.'
-      );
-      setIsScanning(false);
+      const msg = String(err?.message || err);
+      if (msg.includes('NotAllowedError') || msg.includes('Permission')) {
+        setCameraError(
+          'Camera permission denied. Please allow camera access in your browser settings to scan your ID.'
+        );
+      } else if (msg.includes('NotFoundError') || msg.includes('DevicesNotFoundError')) {
+        setCameraError('No camera detected on this device. You can upload a photo of your ID barcode below.');
+      } else {
+        setCameraError('Could not start camera. Please refresh or upload a photo of your ID barcode below.');
+      }
     } finally {
       startingRef.current = false;
     }
-    // handleLiveDecode only touches refs and state setters
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stopScanner]);
 
-  // Toggle torch / flashlight
+  // Flashlight toggle
   const toggleTorch = async () => {
-    if (!scannerRef.current || !hasTorch) return;
+    const scanner = scannerRef.current;
+    if (!scanner || !hasTorch) return;
     try {
-      const next = !isTorchOn;
-      await scannerRef.current.applyVideoConstraints({
-        advanced: [{ torch: next } as MediaTrackConstraintSet],
-      });
-      setIsTorchOn(next);
+      const nextState = !isTorchOn;
+      await scanner.applyVideoConstraints({ advanced: [{ torch: nextState }] });
+      setIsTorchOn(nextState);
     } catch (e) {
-      console.warn('Torch error:', e);
+      console.warn('Torch toggle warning:', e);
     }
   };
 
-  // Scan from an uploaded photo of the barcode (a single clear read is enough here)
+  // Photo upload fallback
   const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -255,7 +270,7 @@ export default function BarcodeScanPage() {
       const index_no = parseIndex(decodedText);
       if (!index_no) {
         setValidationError(
-          'That photo has a different barcode. Please use the barcode on your University Student ID.'
+          'Incorrect barcode. Please scan the front side of your University ID card.'
         );
         return;
       }
@@ -263,7 +278,7 @@ export default function BarcodeScanPage() {
       await acceptIndex(index_no);
     } catch (err) {
       setValidationError(
-        'Could not read a barcode from that photo. Try a sharper, well-lit photo of your ID barcode.'
+        'Incorrect barcode. Please scan the front side of your University ID card.'
       );
     } finally {
       setIsChecking(false);
@@ -271,23 +286,13 @@ export default function BarcodeScanPage() {
     }
   };
 
-  // Start the camera on page load; stop it when leaving
+  // Mount/unmount: start the camera once, release it cleanly when leaving
   useEffect(() => {
     unmountedRef.current = false;
     startScanner();
 
-    return () => {
-      unmountedRef.current = true;
-      const scanner = scannerRef.current;
-      if (scanner?.isScanning) {
-        scanner.stop().catch(() => {});
-      }
-    };
-  }, [startScanner]);
-
-  // Pause the camera while the page is in the background (saves battery, frees the camera)
-  useEffect(() => {
-    const onVisibilityChange = () => {
+    // Release camera when tab is switched or phone goes to sleep; restart when returning
+    const handleVisibility = () => {
       if (document.hidden) {
         if (scannerRef.current?.isScanning) {
           pausedForBackgroundRef.current = true;
@@ -298,18 +303,25 @@ export default function BarcodeScanPage() {
         startScanner();
       }
     };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      unmountedRef.current = true;
+      document.removeEventListener('visibilitychange', handleVisibility);
+      const scanner = scannerRef.current;
+      if (scanner) {
+        try {
+          if (scanner.isScanning) scanner.stop().catch(() => {});
+          scanner.clear();
+        } catch {}
+      }
+    };
   }, [startScanner, stopScanner]);
 
-  // Developer testing shortcuts (local development builds only)
-  const handleDemoBarcode = (index: string) => {
-    acceptIndex(index);
-  };
-
+  // Developer Testing Shortcuts (local builds only)
   const handleSimulateInvalid = () => {
     setValidationError(
-      'Invalid barcode (8901030456128). Please point your camera at the barcode printed on your University Student ID.'
+      'Incorrect barcode. Please scan the front side of your University ID card.'
     );
   };
 
@@ -326,14 +338,14 @@ export default function BarcodeScanPage() {
       <div className="pt-2 space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold text-slate-500">
-            Step 1 of 2
+            Step 1 of 3
           </span>
 
           {IS_DEV_BUILD && (
             <div className="flex items-center space-x-1">
               <button
                 type="button"
-                onClick={() => handleDemoBarcode('250373T')}
+                onClick={() => acceptIndex('250373T')}
                 className="text-[10px] text-emerald-700 font-bold bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded-lg border border-emerald-200 transition"
                 title="Simulate valid UoM ID barcode"
               >
@@ -345,7 +357,7 @@ export default function BarcodeScanPage() {
                 className="text-[10px] text-amber-700 font-bold bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg border border-amber-200 transition"
                 title="Test wrong barcode"
               >
-                Wrong Barcode
+                Wrong
               </button>
               <button
                 type="button"
@@ -353,7 +365,7 @@ export default function BarcodeScanPage() {
                 className="text-[10px] text-rose-700 font-bold bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-lg border border-rose-200 transition"
                 title="Test duplicate account"
               >
-                User Exists
+                Exists
               </button>
             </div>
           )}
@@ -365,7 +377,7 @@ export default function BarcodeScanPage() {
             <Barcode className="w-6 h-6 text-sky-600" />
           </h1>
           <p className="text-xs text-slate-500">
-            Point your camera at the barcode on your University Student ID card.
+            Please scan the front side of your University ID card.
           </p>
         </div>
       </div>
@@ -378,7 +390,7 @@ export default function BarcodeScanPage() {
             <div className="flex items-start space-x-2">
               <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <p className="font-bold text-amber-950 text-xs">Different Barcode Detected</p>
+                <p className="font-bold text-amber-950 text-xs">Incorrect Barcode</p>
                 <p className="leading-relaxed text-amber-800">{validationError}</p>
               </div>
             </div>
@@ -398,7 +410,7 @@ export default function BarcodeScanPage() {
             <div className="flex items-center space-x-2 pt-1">
               <Link
                 href={`/login?index_no=${encodeURIComponent(existingUserError.index_no)}`}
-                className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition shadow-sm"
+                className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition text-center shadow-sm"
               >
                 <span>Sign In to Account</span>
                 <ArrowRight className="w-3.5 h-3.5" />
@@ -421,36 +433,23 @@ export default function BarcodeScanPage() {
               <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
               <p className="leading-relaxed text-rose-800">{cameraError}</p>
             </div>
-            <div className="flex items-center space-x-2">
-              <button
-                type="button"
-                onClick={startScanner}
-                className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition shadow-sm"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Retry Camera</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex-1 py-2 px-3 bg-white border border-rose-200 hover:bg-rose-100 text-rose-800 rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Upload Barcode</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={startScanner}
+              className="w-full py-2.5 rounded-xl bg-rose-600 text-white font-bold text-xs flex items-center justify-center space-x-2"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry Camera Permission</span>
+            </button>
           </div>
         )}
 
-        {/* Live Camera Viewfinder Card */}
-        <div className="relative w-full rounded-3xl overflow-hidden bg-slate-950 border-2 border-slate-800 shadow-xl aspect-square flex flex-col items-center justify-center">
-          {/* iOS Safari WebKit & Android Video Styles Override */}
+        {/* Camera Viewport Container */}
+        <div className="relative w-full aspect-[4/3] rounded-3xl bg-slate-900 overflow-hidden shadow-lg border-2 border-slate-200/80 flex items-center justify-center">
           <style jsx global>{`
             #astrix-barcode-reader {
               width: 100% !important;
               height: 100% !important;
-              border: none !important;
-              padding: 0 !important;
               position: absolute !important;
               inset: 0 !important;
               display: flex !important;
@@ -480,7 +479,7 @@ export default function BarcodeScanPage() {
           <div id="astrix-barcode-reader" className="w-full h-full object-cover" />
           <div id="astrix-file-scanner" className="hidden" />
 
-          {/* Aiming guide (the whole camera picture is scanned) */}
+          {/* Aiming guide */}
           {isScanning && !existingUserError && (
             <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
               <div className="w-[84%] max-w-[320px] aspect-[16/10] rounded-2xl border-2 border-sky-400/80 relative shadow-[0_0_20px_rgba(56,189,248,0.3)]">

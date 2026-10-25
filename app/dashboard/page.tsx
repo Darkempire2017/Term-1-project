@@ -467,11 +467,7 @@ export default function DashboardPage() {
       {/* Top Header & Station Info */}
       <div className="p-5 space-y-3">
         {/* Top Badges & Dev State Switcher */}
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-500">
-            Station 01 • Katubedda
-          </span>
-
+        <div className="flex items-center justify-end">
           {/* Interactive State Toggle (Visible in Dev Mode) */}
           {!isStudentMode && (
             <button
@@ -490,7 +486,7 @@ export default function DashboardPage() {
           <div>
             <h1 className="text-xl font-black text-slate-900 tracking-tight">Smart Umbrella Station</h1>
             <p className="text-xs text-slate-500">
-              Welcome, <span className="font-bold text-slate-700">{currentUserName}</span> ({currentUserIndex})
+              Welcome, <span className="font-bold text-slate-700">{currentUserName}</span>
             </p>
             {isAdmin && (
               <Link href="/admin" className="inline-block mt-1 text-[11px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-lg hover:bg-purple-100">

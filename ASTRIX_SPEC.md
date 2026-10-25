@@ -57,6 +57,8 @@
   - [x] Rate limits on login, signup, verify and forgot-password
   - [x] Removed unauthenticated `/api/*/complete` and `/api/event/removed` routes
   - [x] Real umbrella tag UIDs; working ESP32-S3 firmware in `firmware/`
+  - [x] Dedicated 4-button hardware testing matrix (Borrow, Return, Open, Close) for DEV001 with non-blocking parallel execution
+  - [x] Database reset: all 4 umbrellas set to available (`availability = true`, `borrowed_user = null`), borrow records cleared
   - [ ] Move to a private MQTT broker with per-client publish rules
   - [ ] Back the rate limiter with a shared store (Upstash / Vercel KV)
 

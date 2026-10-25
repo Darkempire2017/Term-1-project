@@ -32,6 +32,18 @@ export async function POST(request: Request) {
       })
       .eq('slot', targetSlot);
 
+    const cleanIndex = index_no?.trim().toUpperCase();
+
+    // DEV001 Super-User mode: Skip loan records and emails
+    if (cleanIndex === 'DEV001') {
+      return NextResponse.json({
+        success: true,
+        message: `Hardware return verified on Slot #${targetSlot}. No loan record closed for DEV001.`,
+        slot: targetSlot,
+        dev: true,
+      });
+    }
+
     // 3. Find active borrow record
     let query = supabaseAdmin
       .from('borrow_records')

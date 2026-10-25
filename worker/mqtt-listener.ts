@@ -103,8 +103,8 @@ client.on('message', async (topic, message) => {
         })
         .eq('slot', slot);
 
-      // 3. Create ACTIVE borrow record and send confirmation email
-      if (studentIndex) {
+      // 3. Create ACTIVE borrow record and send confirmation email (skipped for DEV001)
+      if (studentIndex && studentIndex.toUpperCase().trim() !== 'DEV001') {
         const cleanIndex = studentIndex.toUpperCase().trim();
         const now = new Date();
         const dueTime = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24h window

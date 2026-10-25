@@ -24,6 +24,16 @@ export async function POST(request: Request) {
     const tagId = umbrella_id || slotData?.umbrella_id || `04A1B2C3D${targetSlot}`;
     const studentIndex = index_no?.trim().toUpperCase() || slotData?.borrowed_user;
 
+    // DEV001 Super-User mode: Skip loan records and emails
+    if (studentIndex === 'DEV001') {
+      return NextResponse.json({
+        success: true,
+        message: `Hardware borrow verified on Slot #${targetSlot}. No loan created for DEV001.`,
+        slot: targetSlot,
+        dev: true,
+      });
+    }
+
     if (!studentIndex) {
       return NextResponse.json(
         { success: false, message: 'No student index associated with this borrow.' },

@@ -87,11 +87,13 @@ export async function POST(request: Request) {
 
     const { slot, umbrella_id } = targetSlotData;
 
-    // 3. Mark the slot with the pending student index so worker knows who initiated the borrow
-    await supabaseAdmin
-      .from('umbrellas')
-      .update({ borrowed_user: cleanIndex })
-      .eq('slot', slot);
+    // 3. Mark the slot with the pending student index (skipped for DEV001 to prevent loan creation)
+    if (!isDevAccount) {
+      await supabaseAdmin
+        .from('umbrellas')
+        .update({ borrowed_user: cleanIndex })
+        .eq('slot', slot);
+    }
 
     // 4. Publish HiveMQ MQTT command to cabinet (Topic: astrix-umbrella/cabinet/command)
     const mqttResult = await publishBorrowCommand(slot);

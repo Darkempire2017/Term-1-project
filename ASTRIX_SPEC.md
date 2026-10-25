@@ -107,7 +107,9 @@
 
 ---
 
-## 🛠️ Developer & Special Account Privileges (`DEV001`)
-* **Multi-Borrow Permission:** `DEV001` bypasses the 1-umbrella active loan limit; can hold multiple active loans simultaneously for hardware stress-testing.
-* **Direct Slot Selection:** `DEV001` can click any physical slot (1–4) in the dashboard slot grid to trigger borrow / solenoid eject for that specific slot. Normal student accounts are restricted to the auto-sequenced single slot.
+## 🛠️ Developer & Hardware Testing Mode (`DEV001`)
+* **Zero-Loan Hardware Testing Mode:** `DEV001` is designated as a pure hardware testing account. **No loans are ever created or recorded in `borrow_records`** for `DEV001`. The developer is never trapped in "State B (Active Loan)" and is free to test hardware repeatedly.
+* **Dual Actuation Buttons per Slot:** On the `DEV001` dashboard, each physical slot (1–4) features **two dedicated buttons**:
+  * 🔓 **"Borrow"** button: Sends `{"action": "BORROW", "slot": X}` directly to HiveMQ.
+  * 🔒 **"Return"** button: Sends `{"action": "RETURN", "slot": X}` directly to HiveMQ (no active loan required).
 * **Hardware-Verified Confirmation:** Return operations do not prematurely commit to the database. Loan closure and return confirmation are only committed upon verified Case 3 response from the ESP32 cabinet.

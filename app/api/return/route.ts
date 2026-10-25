@@ -16,36 +16,46 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Find active borrow record in Supabase
-    const { data: activeLoan } = await supabaseAdmin
-      .from('borrow_records')
-      .select('*')
-      .eq('index_no', cleanIndex)
-      .eq('status', 'ACTIVE')
-      .order('borrowed_time', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (!activeLoan) {
-      return NextResponse.json(
-        { success: false, message: 'No active umbrella loan found for your account.' },
-        { status: 400 }
-      );
-    }
-
-    // 2. Identify return slot
+    const isDevAccount = cleanIndex === 'DEV001';
     let targetSlot = requestedSlot;
-    if (!targetSlot) {
-      const { data: userSlot } = await supabaseAdmin
-        .from('umbrellas')
-        .select('slot')
-        .eq('borrowed_user', cleanIndex)
+    let umbrellaId: string = 'DEV-UMBRELLA';
+
+    // 1. If not DEV001, find active borrow record in Supabase
+    if (!isDevAccount) {
+      const { data: activeLoan } = await supabaseAdmin
+        .from('borrow_records')
+        .select('*')
+        .eq('index_no', cleanIndex)
+        .eq('status', 'ACTIVE')
+        .order('borrowed_time', { ascending: false })
+        .limit(1)
         .maybeSingle();
 
-      targetSlot = userSlot?.slot || 1;
+      if (!activeLoan) {
+        return NextResponse.json(
+          { success: false, message: 'No active umbrella loan found for your account.' },
+          { status: 400 }
+        );
+      }
+
+      if (!targetSlot) {
+        const { data: userSlot } = await supabaseAdmin
+          .from('umbrellas')
+          .select('slot')
+          .eq('borrowed_user', cleanIndex)
+          .maybeSingle();
+
+        targetSlot = userSlot?.slot || 1;
+      }
+      umbrellaId = activeLoan.umbrella_id;
+    } else {
+      // DEV001 can test RETURN on any physical slot directly (1-4)
+      if (!targetSlot || targetSlot < 1 || targetSlot > 4) {
+        targetSlot = 1;
+      }
     }
 
-    // 3. Publish HiveMQ MQTT return command to cabinet (Topic: astrix-umbrella/cabinet/command)
+    // 2. Publish HiveMQ MQTT return command to cabinet (Topic: astrix-umbrella/cabinet/command)
     const mqttResult = await publishReturnCommand(targetSlot);
 
     if (!mqttResult.success) {
@@ -64,7 +74,7 @@ export async function POST(request: Request) {
       success: true,
       message: `Slot #${targetSlot} unlocked for return. Please insert the umbrella into Slot #${targetSlot}.`,
       slot: targetSlot,
-      umbrella_id: activeLoan.umbrella_id,
+      umbrella_id: umbrellaId,
       mqtt: mqttResult,
     });
   } catch (error: any) {

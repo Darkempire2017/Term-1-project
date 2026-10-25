@@ -106,23 +106,27 @@ export default function DashboardPage() {
         setSlots(dbSlots as UmbrellaSlotType[]);
       }
 
-      // 2. Fetch active loan for this student
-      const { data: activeBorrow, error: borrowErr } = await supabase
-        .from('borrow_records')
-        .select('*')
-        .eq('index_no', currentUserIndex)
-        .eq('status', 'ACTIVE')
-        .maybeSingle();
+      // 2. Fetch active loan for this student (DEV001 is a pure hardware test account — no loans tracked)
+      if (currentUserIndex !== 'DEV001') {
+        const { data: activeBorrow, error: borrowErr } = await supabase
+          .from('borrow_records')
+          .select('*')
+          .eq('index_no', currentUserIndex)
+          .eq('status', 'ACTIVE')
+          .maybeSingle();
 
-      if (!borrowErr && activeBorrow) {
-        // Find which slot holds or was associated with this umbrella
-        const matchedSlot = dbSlots?.find((s) => s.umbrella_id === activeBorrow.umbrella_id)?.slot || 1;
-        setActiveLoan({
-          record_id: activeBorrow.record_id,
-          umbrella_id: activeBorrow.umbrella_id,
-          slot: matchedSlot,
-          borrowed_time: activeBorrow.borrowed_time,
-        });
+        if (!borrowErr && activeBorrow) {
+          // Find which slot holds or was associated with this umbrella
+          const matchedSlot = dbSlots?.find((s) => s.umbrella_id === activeBorrow.umbrella_id)?.slot || 1;
+          setActiveLoan({
+            record_id: activeBorrow.record_id,
+            umbrella_id: activeBorrow.umbrella_id,
+            slot: matchedSlot,
+            borrowed_time: activeBorrow.borrowed_time,
+          });
+        } else {
+          setActiveLoan(null);
+        }
       } else {
         setActiveLoan(null);
       }
@@ -361,6 +365,50 @@ export default function DashboardPage() {
     }
   };
 
+  // DEV001 Direct Slot Return Command (Direct hardware actuation for any slot 1-4)
+  const handleDevReturn = async (slot: number) => {
+    setActionInProgress('return');
+    setNotification({
+      type: 'info',
+      text: `🔓 Sending RETURN command to Slot #${slot}... Please wait.`,
+    });
+
+    try {
+      const res = await fetch('/api/return', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index_no: currentUserIndex, slot }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        setNotification({
+          type: 'error',
+          text: json.message || `Failed to unlock Slot #${slot} for return.`,
+        });
+        setActionInProgress(null);
+        return;
+      }
+
+      setNotification({
+        type: 'info',
+        text: `🔓 Slot #${slot} unlocked for return test! Insert umbrella into Slot #${slot}. Waiting for cabinet RFID response...`,
+      });
+
+      setTimeout(() => {
+        refreshStationData();
+      }, 20000);
+    } catch (err: any) {
+      console.warn('DEV Return API error:', err);
+      setActionInProgress(null);
+      setNotification({
+        type: 'error',
+        text: `Could not connect to station for Slot #${slot}.`,
+      });
+    }
+  };
+
   // Interactive Test State Switcher
   const toggleDemoState = () => {
     if (activeLoan) {
@@ -452,12 +500,122 @@ export default function DashboardPage() {
         )}
 
         {/* ============================================================================== */}
-        {/* DYNAMIC 2-STATE DISPLAY AREA */}
+        {/* DYNAMIC DASHBOARD DISPLAY: DEV001 TEST MATRIX vs STUDENT 2-STATE VIEW          */}
         {/* ============================================================================== */}
 
-        {!activeLoan ? (
+        {isDevAccount ? (
           /* ============================================================================ */
-          /* STATE A: "WHEN BORROWING" (User has no active loan)                           */
+          /* DEVELOPER ACCOUNT: DEDICATED HARDWARE CONTROL STATION (DEV001)               */
+          /* ============================================================================ */
+          <div className="space-y-4">
+            {/* Developer Control Header */}
+            <div className="bg-gradient-to-br from-purple-700 via-indigo-700 to-purple-800 text-white p-5 rounded-3xl shadow-lg shadow-purple-900/20 space-y-3 relative overflow-hidden">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-1 rounded-full bg-white/20 text-white backdrop-blur-sm flex items-center gap-1.5">
+                  <Wrench className="w-3 h-3" />
+                  <span>Hardware Testing Console</span>
+                </span>
+                <span className="text-xs text-purple-200 font-mono font-bold">
+                  DEV001
+                </span>
+              </div>
+
+              <div className="space-y-1">
+                <p className="text-xs text-purple-200 font-medium">Cabinet Hardware Control</p>
+                <div className="text-2xl font-black tracking-tight flex items-center gap-2">
+                  <span>ESP32 Diagnostics</span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-md bg-emerald-400 text-emerald-950 font-bold">
+                    Zero Loans
+                  </span>
+                </div>
+              </div>
+
+              <p className="text-xs text-purple-200/90 leading-relaxed">
+                Click <strong>Borrow</strong> or <strong>Return</strong> on any physical slot below to test lock release and RFID detection freely with zero rental state lockouts.
+              </p>
+            </div>
+
+            {/* 4 Physical Slots — Direct Hardware Action Matrix */}
+            <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-sm space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  Cabinet Slots (1 - 4) Hardware Controls
+                </span>
+                <span className="text-[11px] font-mono text-purple-600 font-bold">
+                  QoS 0 • Live
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                {slots.map((s) => (
+                  <div
+                    key={s.slot}
+                    className={`p-3.5 rounded-2xl border transition flex flex-col justify-between space-y-2.5 ${
+                      s.availability
+                        ? 'bg-emerald-50/40 border-emerald-200'
+                        : 'bg-slate-50/70 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-700 font-mono">
+                        SLOT #{s.slot}
+                      </span>
+                      <span
+                        className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-md ${
+                          s.availability
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {s.availability ? 'Docked' : 'Empty'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center space-x-2 text-xs">
+                      <div
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                          s.availability ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-400'
+                        }`}
+                      >
+                        <Umbrella className="w-3.5 h-3.5" />
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-500 truncate font-semibold">
+                        {s.umbrella_id}
+                      </span>
+                    </div>
+
+                    {/* DUAL ACTION BUTTONS: BORROW & RETURN */}
+                    <div className="grid grid-cols-2 gap-1.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleBorrow(s.slot)}
+                        disabled={actionInProgress !== null || unlockCountdown !== null}
+                        className="py-2 px-1 text-xs font-black rounded-xl bg-sky-600 hover:bg-sky-700 text-white transition shadow-sm active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1"
+                        title={`Send Borrow command for Slot ${s.slot}`}
+                      >
+                        <Unlock className="w-3 h-3" />
+                        <span>Borrow</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDevReturn(s.slot)}
+                        disabled={actionInProgress !== null || unlockCountdown !== null}
+                        className="py-2 px-1 text-xs font-black rounded-xl bg-amber-600 hover:bg-amber-700 text-white transition shadow-sm active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1"
+                        title={`Send Return command for Slot ${s.slot}`}
+                      >
+                        <Lock className="w-3 h-3" />
+                        <span>Return</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : !activeLoan ? (
+          /* ============================================================================ */
+          /* STATE A: "WHEN BORROWING" (Standard Student View)                            */
           /* ============================================================================ */
           <div className="space-y-4">
             {/* State Banner */}
@@ -492,7 +650,7 @@ export default function DashboardPage() {
             {/* 4-Slot Visual Matrix */}
             <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-sm space-y-2.5">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                Physical Slots (1 - 4) {isDevAccount && '• Click Any Slot to Eject'}
+                Physical Slots (1 - 4)
               </span>
 
               <div className="grid grid-cols-4 gap-2">
@@ -526,18 +684,6 @@ export default function DashboardPage() {
                       >
                         {s.availability ? 'Ready' : 'Out'}
                       </span>
-
-                      {/* DEV001 Direct Eject / Unlock button */}
-                      {isDevAccount && (
-                        <button
-                          type="button"
-                          onClick={() => handleBorrow(s.slot)}
-                          disabled={actionInProgress !== null || unlockCountdown !== null}
-                          className="w-full mt-1 py-1 px-0.5 text-[8.5px] font-bold rounded-lg bg-purple-600 hover:bg-purple-700 text-white transition shadow-xs active:scale-95 cursor-pointer disabled:opacity-50"
-                        >
-                          {s.availability ? `Unlock #${s.slot}` : `Eject #${s.slot}`}
-                        </button>
-                      )}
                     </div>
                   );
                 })}
@@ -581,104 +727,74 @@ export default function DashboardPage() {
                 You have an active umbrella loan. Return it to Slot #{activeLoan.slot} (or any empty slot) by tapping &quot;Return&quot; below.
               </p>
             </div>
-
-            {/* If DEV001 has active loan, still show slot matrix for multi-borrow */}
-            {isDevAccount && (
-              <div className="bg-white p-4 rounded-3xl border border-purple-200/80 shadow-sm space-y-2.5">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-purple-700 block">
-                  🛠️ DEV001 Direct Slot Eject / Borrow Controls
-                </span>
-                <div className="grid grid-cols-4 gap-2">
-                  {slots.map((s) => (
-                    <div
-                      key={s.slot}
-                      className="p-2 rounded-2xl text-center border border-purple-100 bg-purple-50/40 flex flex-col items-center justify-between space-y-1"
-                    >
-                      <span className="text-[10px] font-bold text-slate-600 font-mono">#{s.slot}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleBorrow(s.slot)}
-                        disabled={actionInProgress !== null || unlockCountdown !== null}
-                        className="w-full py-1 px-1 text-[8.5px] font-bold rounded-lg bg-purple-600 hover:bg-purple-700 text-white transition shadow-xs active:scale-95 cursor-pointer disabled:opacity-50"
-                      >
-                        {s.availability ? `Unlock #${s.slot}` : `Eject #${s.slot}`}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
         {/* ============================================================================== */}
-        {/* CORE DUAL BUTTONS (Borrow vs Return State Matrix)                              */}
+        {/* CORE DUAL BUTTONS (Standard Student Borrow vs Return Matrix)                   */}
         {/* ============================================================================== */}
-        <div className="pt-2 space-y-2.5">
-          {/* 1. Borrow Button */}
-          <button
-            type="button"
-            onClick={() => handleBorrow()}
-            disabled={(!isDevAccount && Boolean(activeLoan)) || !nextAvailableSlot || actionInProgress !== null || unlockCountdown !== null}
-            className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
-              unlockCountdown !== null
-                ? 'bg-amber-500 text-white shadow-amber-500/30 animate-pulse cursor-wait'
-                : (!activeLoan || isDevAccount) && nextAvailableSlot
-                ? 'bg-sky-600 hover:bg-sky-700 text-white shadow-sky-600/30 active:scale-[0.99] cursor-pointer'
-                : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
-            }`}
-          >
-            {unlockCountdown !== null ? (
-              <>
-                <Unlock className="w-5 h-5 animate-bounce" />
-                <span>Slot #{nextAvailableSlot?.slot} Unlocked! Pull Umbrella ({unlockCountdown}s)</span>
-              </>
-            ) : actionInProgress === 'borrow' ? (
-              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : isDevAccount && activeLoan ? (
-              <>
-                <Unlock className="w-4 h-4" />
-                <span>Borrow Umbrella (DEV001 Multi-Borrow: Slot {nextAvailableSlot?.slot || 1})</span>
-              </>
-            ) : !activeLoan ? (
-              <>
-                <Unlock className="w-4 h-4" />
-                <span>Borrow Umbrella ({nextAvailableSlot ? `Slot ${nextAvailableSlot.slot}` : 'Unavailable'})</span>
-              </>
-            ) : (
-              <>
-                <Lock className="w-4 h-4" />
-                <span>Borrow (1 Umbrella Limit Reached)</span>
-              </>
-            )}
-          </button>
+        {!isDevAccount && (
+          <div className="pt-2 space-y-2.5">
+            {/* 1. Borrow Button */}
+            <button
+              type="button"
+              onClick={() => handleBorrow()}
+              disabled={Boolean(activeLoan) || !nextAvailableSlot || actionInProgress !== null || unlockCountdown !== null}
+              className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
+                unlockCountdown !== null
+                  ? 'bg-amber-500 text-white shadow-amber-500/30 animate-pulse cursor-wait'
+                  : !activeLoan && nextAvailableSlot
+                  ? 'bg-sky-600 hover:bg-sky-700 text-white shadow-sky-600/30 active:scale-[0.99] cursor-pointer'
+                  : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
+              }`}
+            >
+              {unlockCountdown !== null ? (
+                <>
+                  <Unlock className="w-5 h-5 animate-bounce" />
+                  <span>Slot #{nextAvailableSlot?.slot} Unlocked! Pull Umbrella ({unlockCountdown}s)</span>
+                </>
+              ) : actionInProgress === 'borrow' ? (
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : !activeLoan ? (
+                <>
+                  <Unlock className="w-4 h-4" />
+                  <span>Borrow Umbrella ({nextAvailableSlot ? `Slot ${nextAvailableSlot.slot}` : 'Unavailable'})</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-4 h-4" />
+                  <span>Borrow (1 Umbrella Limit Reached)</span>
+                </>
+              )}
+            </button>
 
-          {/* 2. Return Button */}
-          <button
-            type="button"
-            onClick={handleReturn}
-            disabled={!activeLoan || actionInProgress !== null}
-            className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
-              activeLoan
-                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30 active:scale-[0.99] cursor-pointer'
-                : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
-            }`}
-          >
-            {actionInProgress === 'return' ? (
-              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : activeLoan ? (
-              <>
-                <Check className="w-4 h-4" />
-                <span>Return Umbrella ({activeLoan.umbrella_id})</span>
-              </>
-            ) : (
-              <>
-                <Lock className="w-4 h-4" />
-                <span>Return (No Active Loan)</span>
-              </>
-            )}
-          </button>
-        </div>
+            {/* 2. Return Button */}
+            <button
+              type="button"
+              onClick={handleReturn}
+              disabled={!activeLoan || actionInProgress !== null}
+              className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
+                activeLoan
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30 active:scale-[0.99] cursor-pointer'
+                  : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
+              }`}
+            >
+              {actionInProgress === 'return' ? (
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : activeLoan ? (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>Return Umbrella ({activeLoan.umbrella_id})</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-4 h-4" />
+                  <span>Return (No Active Loan)</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Persistent Bottom Nav */}

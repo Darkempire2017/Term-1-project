@@ -11,6 +11,8 @@ import {
   RefreshCw,
   Check,
   Wrench,
+  AlertCircle,
+  Info,
 } from 'lucide-react';
 import { BottomNav } from '@/components/BottomNav';
 import type { MeResponse, PublicSlot } from '@/lib/types';
@@ -49,6 +51,24 @@ export default function DashboardPage() {
     type: 'success' | 'info' | 'error';
     text: string;
   } | null>(null);
+
+  // Dynamic Full-Screen Ambient Glow: 'green' (borrowing), 'blue' (returning), 'red' (error)
+  const [screenGlow, setScreenGlow] = useState<'green' | 'blue' | 'red' | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const triggerErrorGlow = useCallback(() => {
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    setScreenGlow('red');
+    errorTimerRef.current = setTimeout(() => {
+      setScreenGlow((prev) => (prev === 'red' ? null : prev));
+    }, 6000);
+  }, []);
+
+  const dismissNotification = useCallback(() => {
+    setNotification(null);
+    if (screenGlow === 'red') setScreenGlow(null);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+  }, [screenGlow]);
 
   // Show the cached name instantly while the server confirms the session
   useEffect(() => {
@@ -101,7 +121,12 @@ export default function DashboardPage() {
     setUnlockCountdown(null);
   };
 
-  useEffect(() => stopCountdown, []);
+  useEffect(() => {
+    return () => {
+      stopCountdown();
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    };
+  }, []);
 
   // Next available slot calculation (lowest slot where availability = true)
   const availableSlotsList = slots.filter((s) => s.availability);
@@ -126,14 +151,16 @@ export default function DashboardPage() {
     slotHint: number | null,
     body: Record<string, unknown>
   ) => {
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     setActionInProgress(kind);
+    setScreenGlow(kind === 'borrow' ? 'green' : 'blue');
     setPendingSlot(slotHint);
     setNotification({
       type: 'info',
       text:
         kind === 'borrow'
           ? `🔓 Opening ${slotHint ? `Slot #${slotHint}` : 'the next free slot'}… Take the umbrella when the lock opens.`
-          : `🔓 Opening ${slotHint ? `Slot #${slotHint}` : 'your slot'}… Put the umbrella back in when the lock opens.`,
+          : `🔓 Opening ${slotHint ? `Slot #${slotHint}` : 'your slot'}… Dock the umbrella and wait for lock confirmation.`,
     });
 
     if (kind === 'borrow') {
@@ -155,16 +182,20 @@ export default function DashboardPage() {
       const json = await res.json();
 
       if (res.ok && json.success) {
+        setScreenGlow(null);
         setNotification({ type: 'success', text: `✅ ${json.message}` });
       } else if (json.reason === 'WRONG_UMBRELLA') {
+        triggerErrorGlow();
         setNotification({
           type: 'error',
           text: `❌ Wrong umbrella in Slot #${json.slot}. The slot is left unlocked — take it out and return your own umbrella.`,
         });
       } else {
+        triggerErrorGlow();
         setNotification({ type: 'error', text: `⚠️ ${json.message || 'The request failed. Please try again.'}` });
       }
     } catch {
+      triggerErrorGlow();
       setNotification({ type: 'error', text: 'Could not connect to the station. Please check your connection.' });
     } finally {
       stopCountdown();
@@ -181,6 +212,7 @@ export default function DashboardPage() {
       return;
     }
     if (!nextAvailableSlot) {
+      triggerErrorGlow();
       setNotification({ type: 'error', text: 'No umbrellas currently available at this station.' });
       return;
     }
@@ -218,7 +250,61 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between bg-slate-50 select-none overflow-y-auto">
+    <div className="flex-1 flex flex-col justify-between bg-slate-50 select-none overflow-y-auto relative">
+      {/* ============================================================================== */}
+      {/* DYNAMIC SCREEN GLOW AURA (Green on Borrow, Blue on Return, Red on Error)       */}
+      {/* ============================================================================== */}
+      {screenGlow && (
+        <div
+          className={`pointer-events-none fixed inset-0 max-w-md mx-auto z-40 transition-all duration-500 ease-in-out ${
+            screenGlow === 'green'
+              ? 'ring-8 ring-emerald-500/80 shadow-[inset_0_0_60px_15px_rgba(16,185,129,0.45)]'
+              : screenGlow === 'blue'
+              ? 'ring-8 ring-sky-500/80 shadow-[inset_0_0_60px_15px_rgba(14,165,233,0.45)]'
+              : 'ring-8 ring-rose-500/90 shadow-[inset_0_0_60px_15px_rgba(244,63,94,0.55)]'
+          }`}
+        >
+          {/* Top radiant light gradient */}
+          <div
+            className={`w-full h-36 bg-gradient-to-b opacity-50 animate-pulse ${
+              screenGlow === 'green'
+                ? 'from-emerald-500 via-emerald-400/20 to-transparent'
+                : screenGlow === 'blue'
+                ? 'from-sky-500 via-sky-400/20 to-transparent'
+                : 'from-rose-500 via-rose-400/30 to-transparent'
+            }`}
+          />
+
+          {/* Floating Glow Status Pill */}
+          <div className="absolute top-3 inset-x-0 flex justify-center px-4 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div
+              className={`px-4 py-2 rounded-full text-xs font-black shadow-lg backdrop-blur-md flex items-center space-x-2 border ${
+                screenGlow === 'green'
+                  ? 'bg-emerald-950/85 text-emerald-200 border-emerald-400/40 shadow-emerald-500/25'
+                  : screenGlow === 'blue'
+                  ? 'bg-sky-950/85 text-sky-200 border-sky-400/40 shadow-sky-500/25'
+                  : 'bg-rose-950/90 text-rose-200 border-rose-400/40 shadow-rose-500/25'
+              }`}
+            >
+              <div
+                className={`w-2.5 h-2.5 rounded-full animate-ping ${
+                  screenGlow === 'green'
+                    ? 'bg-emerald-400'
+                    : screenGlow === 'blue'
+                    ? 'bg-sky-400'
+                    : 'bg-rose-400'
+                }`}
+              />
+              <span className="tracking-wide">
+                {screenGlow === 'green' && '🟢 Borrow in Progress… Lock Opening'}
+                {screenGlow === 'blue' && '🔵 Return in Progress… Verifying Umbrella Lock'}
+                {screenGlow === 'red' && '🔴 Operation Alert / Error'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Header & Station Info */}
       <div className="p-5 space-y-3">
         {/* Top Badges & Dev State Switcher */}
@@ -260,7 +346,7 @@ export default function DashboardPage() {
         {/* Notifications & Hardware Feedback */}
         {notification && (
           <div
-            className={`p-3.5 rounded-2xl text-xs flex items-start space-x-2 animate-in fade-in slide-in-from-top-1 shadow-sm ${
+            className={`p-3.5 rounded-2xl text-xs flex items-start space-x-2.5 animate-in fade-in slide-in-from-top-1 shadow-sm ${
               notification.type === 'success'
                 ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
                 : notification.type === 'error'
@@ -268,8 +354,24 @@ export default function DashboardPage() {
                 : 'bg-sky-50 text-sky-900 border border-sky-200'
             }`}
           >
-            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
-            <span className="leading-relaxed">{notification.text}</span>
+            {notification.type === 'success' && (
+              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+            )}
+            {notification.type === 'error' && (
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+            )}
+            {notification.type === 'info' && (
+              <Info className="w-4 h-4 shrink-0 mt-0.5 text-sky-600" />
+            )}
+            <span className="leading-relaxed flex-1">{notification.text}</span>
+            <button
+              type="button"
+              onClick={dismissNotification}
+              className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1 transition"
+              title="Dismiss notification"
+            >
+              ✕
+            </button>
           </div>
         )}
 

@@ -18,7 +18,7 @@
  * MQTT:
  *   - Subscribe: astrix-umbrella/cabinet/command   {"action":"BORROW"|"RETURN","slot":1-4}
  *   - Publish:   astrix-umbrella/cabinet/response  (5 standard responses, QoS 0)
- *   - Publish:   astrix-umbrella/cabinet/slots     (retained: what is in each slot, so the website can sync)
+ *   - Publish:   astrix-umbrella/cabinet/slots     (retained: what is in each slot, lock state, so the website can sync)
  *   - Publish:   astrix-umbrella/cabinet/ack       ("got it" the moment a command arrives)
  *   - Publish:   astrix-umbrella/cabinet/status    (retained online/offline; offline is the MQTT last will)
  *
@@ -158,6 +158,8 @@ int tagCandidateCount[NUM_SLOTS];
 int nextTagSlot = 0;
 unsigned long lastTagPoll = 0;
 unsigned long lastSlotsPublish = 0;
+bool reportedLocked[NUM_SLOTS];          // lock state in the last report
+unsigned long unlockedSince[NUM_SLOTS];  // when each lock last opened (for the admin panel)
 
 const unsigned long buttonSettleTime = 500;   // button must be steady this long to count
 const unsigned long tagPollInterval  = 750;   // read one idle slot's tag every 0.75 s (each slot every ~3 s)
@@ -205,6 +207,11 @@ void updateServos() {
 
 bool servoArrived(int i) {
   return currentPosition[i] == targetPosition[i];
+}
+
+// True when the lock is fully closed
+bool lockClosed(int i) {
+  return currentPosition[i] == LOCK_CLOSED && servoArrived(i);
 }
 
 bool anyServoMoving() {
@@ -428,19 +435,25 @@ void setSlotState(int slot, bool docked, int umbrella) {
 void publishSlots() {
   if (!mqtt.connected()) return; // sent again on the next change or refresh
 
-  char payload[320];
+  char payload[448];
+  unsigned long now = millis();
   int n = snprintf(payload, sizeof(payload), "{\"slots\":[");
   for (int s = 0; s < NUM_SLOTS; s++) {
+    bool locked = lockClosed(s);
+    unsigned long unlockedSeconds = locked ? 0 : (now - unlockedSince[s]) / 1000;
     char umbrella[8];
     if (seen[s].umbrella >= 0) snprintf(umbrella, sizeof(umbrella), "%d", seen[s].umbrella + 1);
     else if (seen[s].umbrella == UNKNOWN_TAG) snprintf(umbrella, sizeof(umbrella), "0");
     else snprintf(umbrella, sizeof(umbrella), "null");
 
-    n += snprintf(payload + n, sizeof(payload) - n, "%s{\"slot\":%d,\"busy\":%s,\"docked\":%s,\"umbrella\":%s}",
+    n += snprintf(payload + n, sizeof(payload) - n,
+                  "%s{\"slot\":%d,\"busy\":%s,\"docked\":%s,\"umbrella\":%s,\"locked\":%s,\"unlocked_s\":%lu}",
                   s > 0 ? "," : "", s + 1,
                   jobs[s].phase != SLOT_IDLE ? "true" : "false",
                   seen[s].docked ? "true" : "false",
-                  umbrella);
+                  umbrella,
+                  locked ? "true" : "false",
+                  unlockedSeconds);
   }
   snprintf(payload + n, sizeof(payload) - n, "]}");
 
@@ -455,6 +468,16 @@ void publishSlots() {
 void watchIdleSlots() {
   unsigned long now = millis();
   bool changed = false;
+
+  // Report every lock opening/closing (the admin panel flags slots left unlocked)
+  for (int s = 0; s < NUM_SLOTS; s++) {
+    bool locked = lockClosed(s);
+    if (locked != reportedLocked[s]) {
+      reportedLocked[s] = locked;
+      if (!locked) unlockedSince[s] = now;
+      changed = true;
+    }
+  }
 
   for (int s = 0; s < NUM_SLOTS; s++) {
     if (jobs[s].phase != SLOT_IDLE) continue;
@@ -674,6 +697,8 @@ void setup() {
     seen[i].umbrella = NO_TAG;
     tagCandidate[i] = NO_TAG;
     tagCandidateCount[i] = 0;
+    reportedLocked[i] = true;
+    unlockedSince[i] = 0;
   }
 
   // Deselect every reader before using SPI, so they don't talk over each other

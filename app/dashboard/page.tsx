@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Umbrella,
@@ -80,6 +81,7 @@ export default function DashboardPage() {
 
   // Developer (hardware testing) access is decided by the server
   const [isDevAccount, setIsDevAccount] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Cabinet online/offline from the server (null = not known yet)
   const [cabinetOnline, setCabinetOnline] = useState<boolean | null>(null);
@@ -156,6 +158,7 @@ export default function DashboardPage() {
       setCurrentUserIndex(json.user.index_no);
       setCurrentUserName(json.user.username || 'Student');
       setIsDevAccount(json.is_dev);
+      setIsAdmin(json.is_admin);
       setCabinetOnline(json.cabinet_online);
       setSlots(json.slots);
       setActiveLoan(json.active_loan);
@@ -489,6 +492,11 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-500">
               Welcome, <span className="font-bold text-slate-700">{currentUserName}</span> ({currentUserIndex})
             </p>
+            {isAdmin && (
+              <Link href="/admin" className="inline-block mt-1 text-[11px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-lg hover:bg-purple-100">
+                Open admin panel
+              </Link>
+            )}
           </div>
           <button
             onClick={refreshStationData}

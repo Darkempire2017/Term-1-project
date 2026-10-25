@@ -5,6 +5,7 @@ import { isDevIndex } from '@/lib/dev';
 import { findOpenLoan } from '@/lib/loans';
 import { syncCabinetSlots } from '@/lib/cabinet-sync';
 import { getCachedCabinetOnline } from '@/lib/mqtt';
+import { isAdminIndex } from '@/lib/admin';
 import type { MeResponse, PublicSlot } from '@/lib/types';
 
 /**
@@ -26,7 +27,7 @@ export async function GET() {
 
     const { data: user, error: userError } = await supabaseAdmin
       .from('users')
-      .select('index_no, username, email, is_verified')
+      .select('*')
       .eq('index_no', indexNo)
       .maybeSingle();
 
@@ -35,8 +36,8 @@ export async function GET() {
       return NextResponse.json({ success: false, message: 'Could not load your account.' }, { status: 500 });
     }
 
-    // Account deleted or unverified: end the session
-    if (!user || !user.is_verified) {
+    // Account deleted, unverified or locked by an admin: end the session
+    if (!user || !user.is_verified || user.is_locked === true) {
       const response = NextResponse.json(
         { success: false, message: 'Your session has expired. Please sign in again.' },
         { status: 401 }
@@ -69,6 +70,7 @@ export async function GET() {
       success: true,
       user: { index_no: user.index_no, username: user.username, email: user.email },
       is_dev: isDev,
+      is_admin: isAdminIndex(indexNo),
       cabinet_online: getCachedCabinetOnline(),
       slots,
       active_loan: loan

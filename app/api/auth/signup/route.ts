@@ -4,6 +4,7 @@ import { sendVerificationOtpEmail } from '@/lib/email';
 import { createVerificationToken, hashOtp } from '@/lib/auth-token';
 import { generateOtp } from '@/lib/otp';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
+import { logActivity, raiseAlert } from '@/lib/events';
 
 const INDEX_FORMAT = /^(DEV[0-9]{3}|[0-9]{6}[A-Z])$/;
 
@@ -37,6 +38,9 @@ export async function POST(request: Request) {
     // Max 3 codes per index and 10 per IP every 15 minutes (stops inbox flooding)
     const ip = clientIp(request);
     if (!rateLimit(`signup:idx:${cleanIndex}`, 3, 15 * 60 * 1000) || !rateLimit(`signup:ip:${ip}`, 10, 15 * 60 * 1000)) {
+      await raiseAlert('SIGNUP_FLOOD', 'warning', `Too many signup codes requested for ${cleanIndex} or from one network.`, {
+        index_no: cleanIndex, actor: cleanIndex, dedupeKey: `idx:${cleanIndex}`, details: { ip },
+      });
       return NextResponse.json(
         { success: false, message: 'Too many verification codes requested. Please wait 15 minutes and try again.' },
         { status: 429 }
@@ -82,11 +86,16 @@ export async function POST(request: Request) {
     const emailResult = await sendVerificationOtpEmail(cleanEmail, cleanName, otp);
     if (!emailResult.success) {
       console.error('❌ [API/Auth/Signup] Email delivery failed:', emailResult.error);
+      await raiseAlert('EMAIL_FAILED', 'warning', `A signup verification email for ${cleanIndex} could not be sent.`, {
+        index_no: cleanIndex, actor: 'system', dedupeKey: 'signup-email', details: { error: emailResult.error },
+      });
       return NextResponse.json(
         { success: false, message: 'Could not send the verification email. Please check the address and try again.' },
         { status: 502 }
       );
     }
+
+    await logActivity('SIGNUP_CODE_SENT', `Signup code sent for ${cleanIndex}`, { index_no: cleanIndex, actor: cleanIndex });
 
     return NextResponse.json({
       success: true,
@@ -99,6 +108,9 @@ export async function POST(request: Request) {
     });
   } catch (error: any) {
     console.error('❌ [API/Auth/Signup] Error:', error);
+    await raiseAlert('SERVER_ERROR', 'critical', `Signup failed with a server error: ${error?.message || error}`, {
+      actor: 'system', dedupeKey: 'route:signup',
+    });
     return NextResponse.json({ success: false, message: 'Signup failed. Please try again.' }, { status: 500 });
   }
 }

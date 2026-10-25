@@ -5,6 +5,7 @@ import { sendReturnReceiptEmail } from '@/lib/email';
 import { getSessionIndex } from '@/lib/session';
 import { isDevIndex } from '@/lib/dev';
 import { findOpenLoan, formatLoanDuration } from '@/lib/loans';
+import { logActivity, raiseAlert } from '@/lib/events';
 
 // The cabinet takes up to ~20 s to report the result, so allow the route to wait
 export const maxDuration = 60;
@@ -34,6 +35,9 @@ export async function POST(request: Request) {
       }
 
       const result = await runCabinetCommand('RETURN', slot);
+      await logActivity('DEV_RETURN', `Developer ${indexNo} tested RETURN on Slot ${slot}: ${result.ok ? result.response.reason || result.response.status : result.error}`, {
+        slot, index_no: indexNo, actor: indexNo,
+      });
       if (!result.ok) {
         return NextResponse.json(
           { success: false, message: cabinetErrorMessage(result.error, 'RETURN'), slot },
@@ -92,6 +96,14 @@ export async function POST(request: Request) {
     const result = await runCabinetCommand('RETURN', homeSlot.slot);
 
     if (!result.ok) {
+      if (result.error === 'TIMEOUT') {
+        await raiseAlert('CABINET_NO_RESPONSE', 'warning', `The cabinet confirmed ${indexNo}'s return to Slot ${homeSlot.slot} but never sent the result. Check whether the umbrella is back.`, {
+          slot: homeSlot.slot, index_no: indexNo, actor: 'cabinet', dedupeKey: `slot:${homeSlot.slot}`,
+        });
+      }
+      await logActivity('RETURN_FAILED', `${indexNo}'s return to Slot ${homeSlot.slot} failed: ${result.error}`, {
+        slot: homeSlot.slot, index_no: indexNo, actor: indexNo,
+      });
       return NextResponse.json(
         { success: false, message: cabinetErrorMessage(result.error, 'RETURN'), slot: homeSlot.slot },
         { status: cabinetErrorStatus(result.error) }
@@ -100,6 +112,14 @@ export async function POST(request: Request) {
 
     // Case 4 / Case 5: loan stays open
     if (result.response.status !== 'SUCCESS') {
+      if (result.response.reason === 'WRONG_UMBRELLA') {
+        await raiseAlert('WRONG_UMBRELLA_RETURNED', 'critical', `${indexNo} put the wrong umbrella in Slot ${homeSlot.slot}. The slot was left unlocked.`, {
+          slot: homeSlot.slot, index_no: indexNo, actor: indexNo,
+        });
+      }
+      await logActivity('RETURN_FAILED', `${indexNo}'s return to Slot ${homeSlot.slot}: ${result.response.reason}`, {
+        slot: homeSlot.slot, index_no: indexNo, actor: indexNo,
+      });
       return NextResponse.json({
         success: false,
         message: result.response.message,
@@ -121,6 +141,10 @@ export async function POST(request: Request) {
       .from('umbrellas')
       .update({ availability: true, borrowed_user: null })
       .eq('slot', homeSlot.slot);
+
+    await logActivity('RETURN', `${indexNo} returned Umbrella ${homeSlot.slot} to Slot ${homeSlot.slot} (${durationStr})`, {
+      slot: homeSlot.slot, index_no: indexNo, actor: indexNo,
+    });
 
     // Return receipt email
     try {
@@ -145,6 +169,9 @@ export async function POST(request: Request) {
     });
   } catch (error: any) {
     console.error('❌ [API/Return] Error:', error);
+    await raiseAlert('SERVER_ERROR', 'critical', `Return failed with a server error: ${error?.message || error}`, {
+      actor: 'system', dedupeKey: 'route:return',
+    });
     return NextResponse.json({ success: false, message: 'Return request failed. Please try again.' }, { status: 500 });
   }
 }

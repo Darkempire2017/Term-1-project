@@ -5,6 +5,7 @@ import { hashPassword } from '@/lib/password';
 import { sendWelcomeSignupEmail } from '@/lib/email';
 import { safeEqual } from '@/lib/otp';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
+import { logActivity, raiseAlert } from '@/lib/events';
 
 export async function POST(request: Request) {
   try {
@@ -32,6 +33,9 @@ export async function POST(request: Request) {
     // Max 5 code guesses per account and 20 per IP every 15 minutes
     const ip = clientIp(request);
     if (!rateLimit(`verify:idx:${cleanIndex}`, 5, 15 * 60 * 1000) || !rateLimit(`verify:ip:${ip}`, 20, 15 * 60 * 1000)) {
+      await raiseAlert('TOO_MANY_CODE_ATTEMPTS', 'warning', `Too many wrong verification/reset codes for ${cleanIndex} or from one network.`, {
+        index_no: cleanIndex, actor: cleanIndex, dedupeKey: `idx:${cleanIndex}`, details: { ip },
+      });
       return NextResponse.json(
         { success: false, message: 'Too many attempts. Please wait 15 minutes and request a new code.' },
         { status: 429 }
@@ -113,6 +117,10 @@ export async function POST(request: Request) {
         }
       })();
 
+      await logActivity('ACCOUNT_CREATED', `New account ${payload.index_no} (${payload.username})`, {
+        index_no: payload.index_no, actor: payload.index_no,
+      });
+
       return NextResponse.json({
         success: true,
         message: 'Account verified successfully and password set.',
@@ -170,6 +178,8 @@ export async function POST(request: Request) {
       );
     }
 
+    await logActivity('PASSWORD_RESET', `${cleanIndex} reset their password`, { index_no: cleanIndex, actor: cleanIndex });
+
     return NextResponse.json({
       success: true,
       message: 'Password reset successfully! You can now sign in with your new password.',
@@ -178,6 +188,9 @@ export async function POST(request: Request) {
     });
   } catch (error: any) {
     console.error('❌ [API/Auth/Verify] Error:', error);
+    await raiseAlert('SERVER_ERROR', 'critical', `Verification failed with a server error: ${error?.message || error}`, {
+      actor: 'system', dedupeKey: 'route:verify',
+    });
     return NextResponse.json({ success: false, message: 'Verification failed. Please try again.' }, { status: 500 });
   }
 }

@@ -5,6 +5,7 @@ import { sendBorrowReceiptEmail } from '@/lib/email';
 import { getSessionIndex } from '@/lib/session';
 import { isDevIndex } from '@/lib/dev';
 import { findOpenLoan } from '@/lib/loans';
+import { countRecentActivity, logActivity, raiseAlert } from '@/lib/events';
 
 // The cabinet takes up to ~20 s to report the result, so allow the route to wait
 export const maxDuration = 60;
@@ -39,6 +40,9 @@ export async function POST(request: Request) {
       }
 
       const result = await runCabinetCommand('BORROW', slot);
+      await logActivity('DEV_BORROW', `Developer ${indexNo} tested BORROW on Slot ${slot}: ${result.ok ? result.response.status : result.error}`, {
+        slot, index_no: indexNo, actor: indexNo,
+      });
       if (!result.ok) {
         return NextResponse.json(
           { success: false, message: cabinetErrorMessage(result.error, 'BORROW'), slot },
@@ -157,6 +161,9 @@ export async function POST(request: Request) {
     });
   } catch (error: any) {
     console.error('❌ [API/Borrow] Error:', error);
+    await raiseAlert('SERVER_ERROR', 'critical', `Borrow failed with a server error: ${error?.message || error}`, {
+      actor: 'system', dedupeKey: 'route:borrow',
+    });
     return NextResponse.json({ success: false, message: 'Borrow request failed. Please try again.' }, { status: 500 });
   }
 }
@@ -187,15 +194,29 @@ async function completeBorrow(
       console.error(
         `❌ [API/Borrow] No cabinet response for slot ${claimed.slot} (student ${indexNo}). Slot kept held — check the cabinet and clear umbrellas.borrowed_user by hand.`
       );
+      await raiseAlert('CABINET_NO_RESPONSE', 'warning', `The cabinet confirmed ${indexNo}'s borrow from Slot ${claimed.slot} but never sent the result. The slot is held until someone checks it.`, {
+        slot: claimed.slot, index_no: indexNo, actor: 'cabinet', dedupeKey: `slot:${claimed.slot}`,
+      });
     } else {
       await releaseClaim();
     }
+    await logActivity('BORROW_FAILED', `${indexNo}'s borrow from Slot ${claimed.slot} failed: ${result.error}`, {
+      slot: claimed.slot, index_no: indexNo, actor: indexNo,
+    });
     return { success: false, message: cabinetErrorMessage(result.error, 'BORROW'), slot: claimed.slot };
   }
 
   // Case 2: the umbrella was not taken — free the slot again
   if (result.response.status !== 'SUCCESS') {
     await releaseClaim();
+    await logActivity('BORROW_NOT_TAKEN', `${indexNo} did not take Umbrella ${claimed.slot} from Slot ${claimed.slot}`, {
+      slot: claimed.slot, index_no: indexNo, actor: indexNo,
+    });
+    if ((await countRecentActivity('BORROW_NOT_TAKEN', indexNo, 60 * 60 * 1000)) >= 3) {
+      await raiseAlert('REPEATED_NOT_TAKEN', 'warning', `${indexNo} has opened a slot 3 or more times in the last hour without taking the umbrella.`, {
+        index_no: indexNo, actor: indexNo, dedupeKey: `idx:${indexNo}`,
+      });
+    }
     return {
       success: false,
       message: result.response.message,
@@ -223,7 +244,14 @@ async function completeBorrow(
 
   if (insertError) {
     console.error('❌ [API/Borrow] Loan insert error:', insertError.message);
+    await raiseAlert('LOAN_NOT_RECORDED', 'critical', `${indexNo} took Umbrella ${claimed.slot} but the loan could not be saved: ${insertError.message}`, {
+      slot: claimed.slot, index_no: indexNo, actor: 'system',
+    });
   }
+
+  await logActivity('BORROW', `${indexNo} borrowed Umbrella ${claimed.slot} from Slot ${claimed.slot}`, {
+    slot: claimed.slot, index_no: indexNo, actor: indexNo,
+  });
 
   // Borrow receipt email
   try {

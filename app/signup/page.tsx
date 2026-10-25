@@ -1,27 +1,48 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Barcode,
-  Camera,
   AlertTriangle,
   ShieldCheck,
-  CheckCircle2,
   RefreshCw,
   Flashlight,
   Upload,
   ArrowRight,
   UserCheck,
+  Keyboard,
 } from 'lucide-react';
-import { useViewMode } from '@/components/ViewModeContext';
+
+// The UoM student ID barcode contains only the index number: 6 digits + a letter
+const INDEX_PATTERN = /^[0-9]{6}[A-Z]$/;
+
+// A live result is accepted only after the same index is read this many times in a
+// row, so a one-character misread of a 1D barcode can't create the wrong account
+const CONFIRM_READS = 2;
+
+// Developer shortcuts and the raw-scan readout only exist in local development builds
+const IS_DEV_BUILD = process.env.NODE_ENV !== 'production';
+
+// Strip Code 39 start/stop '*' and stray spaces/dashes, then require exactly an index number
+const parseIndex = (rawText: string): string | null => {
+  if (!rawText) return null;
+  const cleaned = rawText.replace(/[\*\s\-\/]+/g, '').toUpperCase();
+  return INDEX_PATTERN.test(cleaned) ? cleaned : null;
+};
 
 export default function BarcodeScanPage() {
   const router = useRouter();
-  const { isStudentMode } = useViewMode();
   const scannerRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Guards that must not wait for a re-render (the decode callback runs many times a second)
+  const busyRef = useRef(false);                                // an index is being checked
+  const startingRef = useRef(false);                            // the camera is starting
+  const unmountedRef = useRef(false);
+  const pausedForBackgroundRef = useRef(false);
+  const lastReadRef = useRef<{ index: string; count: number }>({ index: '', count: 0 });
 
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -33,40 +54,31 @@ export default function BarcodeScanPage() {
   const [isChecking, setIsChecking] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
+  const [showManualEntry, setShowManualEntry] = useState(false);
+  const [manualIndex, setManualIndex] = useState('');
+  const [lastRawScan, setLastRawScan] = useState<string | null>(null); // dev builds only
 
-  // Parse and validate UoM Student Index Number from Barcode text
-  const extractUomIndex = (rawText: string): string | null => {
-    if (!rawText) return null;
-    // Strip common barcode padding (like '*' in Code 39 or prefix)
-    const cleaned = rawText.replace(/[\*\s\-\/]+/g, '').toUpperCase();
-    const match = cleaned.match(/\b([0-9]{6}[A-Z])\b/);
-    return match ? match[1].toUpperCase() : null;
-  };
-
-  // Process decoded barcode text
-  const handleBarcodeDecoded = async (decodedText: string) => {
-    setValidationError(null);
-    setExistingUserError(null);
-
-    const index_no = extractUomIndex(decodedText);
-
-    if (!index_no) {
-      // Barcode does not contain a valid Moratuwa Index Number
-      setValidationError(
-        'Invalid barcode. Please point your camera directly at the barcode on your University Student ID.'
-      );
-      return;
-    }
-
-    // Stop scanner while validating
+  // Stop the camera if it is running (safe to call at any time)
+  const stopScanner = useCallback(async () => {
+    const scanner = scannerRef.current;
+    if (!scanner) return;
     try {
-      if (scannerRef.current && isScanning) {
-        await scannerRef.current.stop();
-        setIsScanning(false);
-      }
+      if (scanner.isScanning) await scanner.stop();
     } catch (e) {
       console.warn('Scanner stop warning:', e);
     }
+    setIsScanning(false);
+    setIsTorchOn(false);
+  }, []);
+
+  // An index number was read (or typed): check it and continue to step 2
+  const acceptIndex = async (index_no: string) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setValidationError(null);
+    setExistingUserError(null);
+
+    await stopScanner();
 
     // Haptic feedback
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
@@ -76,7 +88,7 @@ export default function BarcodeScanPage() {
     setIsChecking(true);
 
     try {
-      // Check if user already exists in database
+      // Check if an account already exists for this index
       const res = await fetch('/api/auth/check-index', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -93,15 +105,16 @@ export default function BarcodeScanPage() {
             `An account already exists for Index Number ${index_no}. Please sign in to your account.`,
         });
         setIsChecking(false);
+        busyRef.current = false;
         return;
       }
 
-      // Valid and non-existent student: Save index into session and forward to Screen 1B
+      // Valid and new: save the index for step 2 (the server checks again at signup)
       sessionStorage.setItem('astrix_verified_index', index_no);
       router.push('/signup/details');
     } catch (err: any) {
       console.error('Verification check error:', err);
-      // Fallback
+      // The signup API refuses existing accounts anyway, so continue
       sessionStorage.setItem('astrix_verified_index', index_no);
       router.push('/signup/details');
     } finally {
@@ -109,61 +122,93 @@ export default function BarcodeScanPage() {
     }
   };
 
+  // Called for every frame the camera decodes a barcode
+  const handleLiveDecode = (decodedText: string, decodedResult?: any) => {
+    if (busyRef.current) return;
+
+    if (IS_DEV_BUILD) {
+      const format = decodedResult?.result?.format?.formatName;
+      setLastRawScan(`${decodedText}${format ? ` (${format})` : ''}`);
+    }
+
+    const index_no = parseIndex(decodedText);
+    if (!index_no) {
+      lastReadRef.current = { index: '', count: 0 };
+      setValidationError(
+        'Invalid barcode. Please point your camera directly at the barcode on your University Student ID.'
+      );
+      return;
+    }
+
+    // Accept only after the same index is read CONFIRM_READS times in a row
+    const last = lastReadRef.current;
+    lastReadRef.current = last.index === index_no ? { index: index_no, count: last.count + 1 } : { index: index_no, count: 1 };
+    if (lastReadRef.current.count >= CONFIRM_READS) {
+      lastReadRef.current = { index: '', count: 0 };
+      acceptIndex(index_no);
+    }
+  };
+
   // Start the live camera scanner
-  const startScanner = async () => {
+  const startScanner = useCallback(async () => {
+    if (startingRef.current || unmountedRef.current) return;
+    startingRef.current = true;
+    busyRef.current = false;
+    lastReadRef.current = { index: '', count: 0 };
     setCameraError(null);
     setValidationError(null);
     setExistingUserError(null);
+    setHasTorch(false);
+    setIsTorchOn(false);
 
     try {
       const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
 
-      if (scannerRef.current) {
-        try {
-          await scannerRef.current.stop();
-        } catch {}
+      await stopScanner();
+      if (unmountedRef.current) return;
+
+      if (!scannerRef.current) {
+        scannerRef.current = new Html5Qrcode('astrix-barcode-reader', {
+          // Only the 1D formats that can hold letters (the index ends with a letter)
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.CODE_93,
+          ],
+          // Use the phone's built-in barcode reader when available (fast and accurate
+          // on Android Chrome); other browsers fall back to the library's own decoder
+          experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+          verbose: false,
+        });
       }
 
-      const html5QrCode = new Html5Qrcode('astrix-barcode-reader', {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.CODE_93,
-          Html5QrcodeSupportedFormats.QR_CODE,
-          Html5QrcodeSupportedFormats.EAN_13,
-        ],
-        verbose: false,
-      });
-
-      scannerRef.current = html5QrCode;
-
-      // Proportional scanning box that adapts to any screen or camera aspect ratio (iOS / Android)
-      const qrboxFunction = (viewfinderWidth: number, viewfinderHeight: number) => {
-        const boxWidth = Math.max(200, Math.floor(viewfinderWidth * 0.82));
-        const boxHeight = Math.max(110, Math.floor(boxWidth * 0.52));
-        return { width: boxWidth, height: boxHeight };
-      };
-
-      const config = {
-        fps: 15,
-        qrbox: qrboxFunction,
-        aspectRatio: 1.0,
-      };
-
-      await html5QrCode.start(
+      await scannerRef.current.start(
         { facingMode: 'environment' },
-        config,
-        (decodedText) => {
-          handleBarcodeDecoded(decodedText);
+        {
+          fps: 12,
+          // No qrbox: the whole picture is scanned, so a barcode anywhere in view is read.
+          // The frame drawn on screen is only a guide.
+          videoConstraints: {
+            facingMode: 'environment',
+            // A sharp picture matters for the thin bars of a 1D barcode
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+          },
         },
+        handleLiveDecode,
         undefined
       );
 
+      if (unmountedRef.current) {
+        await stopScanner();
+        return;
+      }
       setIsScanning(true);
 
       // Check if torch/flashlight is supported
       try {
-        const capabilities = html5QrCode.getRunningTrackCapabilities();
+        const capabilities = scannerRef.current.getRunningTrackCapabilities();
         if (capabilities && 'torch' in capabilities) {
           setHasTorch(true);
         }
@@ -171,11 +216,15 @@ export default function BarcodeScanPage() {
     } catch (err: any) {
       console.warn('Camera start error:', err);
       setCameraError(
-        'Unable to access camera. Please allow camera permissions or upload an image of your ID barcode.'
+        'Unable to access camera. Please allow camera permissions, upload a photo of your ID barcode, or type your index number.'
       );
       setIsScanning(false);
+    } finally {
+      startingRef.current = false;
     }
-  };
+    // handleLiveDecode only touches refs and state setters
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopScanner]);
 
   // Toggle torch / flashlight
   const toggleTorch = async () => {
@@ -183,7 +232,7 @@ export default function BarcodeScanPage() {
     try {
       const next = !isTorchOn;
       await scannerRef.current.applyVideoConstraints({
-        advanced: [{ torch: next }],
+        advanced: [{ torch: next } as MediaTrackConstraintSet],
       });
       setIsTorchOn(next);
     } catch (e) {
@@ -191,7 +240,7 @@ export default function BarcodeScanPage() {
     }
   };
 
-  // Scan from uploaded barcode image file
+  // Scan from an uploaded photo of the barcode (a single clear read is enough here)
   const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -202,14 +251,22 @@ export default function BarcodeScanPage() {
       setExistingUserError(null);
 
       const { Html5Qrcode } = await import('html5-qrcode');
-      const html5QrCode = new Html5Qrcode('astrix-file-scanner');
-      const decodedText = await html5QrCode.scanFile(file, true);
-      html5QrCode.clear();
+      const fileScanner = new Html5Qrcode('astrix-file-scanner');
+      const decodedText = await fileScanner.scanFile(file, false);
+      fileScanner.clear();
 
-      await handleBarcodeDecoded(decodedText);
+      const index_no = parseIndex(decodedText);
+      if (!index_no) {
+        setValidationError(
+          'That photo has a different barcode. Please use the barcode on your University Student ID.'
+        );
+        return;
+      }
+      setIsChecking(false);
+      await acceptIndex(index_no);
     } catch (err) {
       setValidationError(
-        'Could not read a valid barcode from the selected image. Please point your camera directly at the barcode.'
+        'Could not read a barcode from that photo. Try a sharper, well-lit photo, or type your index number.'
       );
     } finally {
       setIsChecking(false);
@@ -217,22 +274,51 @@ export default function BarcodeScanPage() {
     }
   };
 
-  // Mount scanner on page load
+  // Typed index number (for damaged cards or devices without a camera)
+  const handleManualSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const index_no = parseIndex(manualIndex);
+    if (!index_no) {
+      setValidationError('An index number is 6 digits followed by a letter, for example 250373T.');
+      return;
+    }
+    await acceptIndex(index_no);
+  };
+
+  // Start the camera on page load; stop it when leaving
   useEffect(() => {
+    unmountedRef.current = false;
     startScanner();
 
     return () => {
-      if (scannerRef.current) {
-        try {
-          scannerRef.current.stop();
-        } catch {}
+      unmountedRef.current = true;
+      const scanner = scannerRef.current;
+      if (scanner?.isScanning) {
+        scanner.stop().catch(() => {});
       }
     };
-  }, []);
+  }, [startScanner]);
 
-  // Developer Testing Shortcuts
+  // Pause the camera while the page is in the background (saves battery, frees the camera)
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        if (scannerRef.current?.isScanning) {
+          pausedForBackgroundRef.current = true;
+          stopScanner();
+        }
+      } else if (pausedForBackgroundRef.current && !busyRef.current) {
+        pausedForBackgroundRef.current = false;
+        startScanner();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [startScanner, stopScanner]);
+
+  // Developer testing shortcuts (local development builds only)
   const handleDemoBarcode = (index: string) => {
-    handleBarcodeDecoded(index);
+    acceptIndex(index);
   };
 
   const handleSimulateInvalid = () => {
@@ -257,7 +343,7 @@ export default function BarcodeScanPage() {
             Step 1 of 2
           </span>
 
-          {!isStudentMode && (
+          {IS_DEV_BUILD && (
             <div className="flex items-center space-x-1">
               <button
                 type="button"
@@ -326,7 +412,7 @@ export default function BarcodeScanPage() {
             <div className="flex items-center space-x-2 pt-1">
               <Link
                 href={`/login?index_no=${encodeURIComponent(existingUserError.index_no)}`}
-                className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition text-center shadow-sm"
+                className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition shadow-sm"
               >
                 <span>Sign In to Account</span>
                 <ArrowRight className="w-3.5 h-3.5" />
@@ -353,7 +439,7 @@ export default function BarcodeScanPage() {
               <button
                 type="button"
                 onClick={startScanner}
-                className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition"
+                className="flex-1 py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition shadow-sm"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>Retry Camera</span>
@@ -371,7 +457,7 @@ export default function BarcodeScanPage() {
         )}
 
         {/* Live Camera Viewfinder Card */}
-        <div className="relative w-full rounded-3xl overflow-hidden bg-slate-950 border-2 border-slate-800 shadow-xl aspect-square flex flex-col items-center justify-center min-h-[290px]">
+        <div className="relative w-full rounded-3xl overflow-hidden bg-slate-950 border-2 border-slate-800 shadow-xl aspect-square flex flex-col items-center justify-center">
           {/* iOS Safari WebKit & Android Video Styles Override */}
           <style jsx global>{`
             #astrix-barcode-reader {
@@ -408,10 +494,9 @@ export default function BarcodeScanPage() {
           <div id="astrix-barcode-reader" className="w-full h-full object-cover" />
           <div id="astrix-file-scanner" className="hidden" />
 
-          {/* Targeting Laser & Corner Overlays */}
+          {/* Aiming guide (the whole camera picture is scanned) */}
           {isScanning && !existingUserError && (
             <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
-              {/* Card Bounding Frame (Responsive width & aspect ratio) */}
               <div className="w-[84%] max-w-[320px] aspect-[16/10] rounded-2xl border-2 border-sky-400/80 relative shadow-[0_0_20px_rgba(56,189,248,0.3)]">
                 {/* Corner Marks */}
                 <div className="absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 border-sky-400" />
@@ -420,11 +505,11 @@ export default function BarcodeScanPage() {
                 <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-4 border-r-4 border-sky-400" />
 
                 {/* Animated Red Laser Scan Line */}
-                <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_8px_#ef4444] animate-pulse top-1/2 -translate-y-1/2" />
+                <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_8px_#ef4444] animate-pulse top-1/2" />
               </div>
 
               <p className="text-[11px] font-semibold text-white/90 bg-black/60 backdrop-blur-xs px-3 py-1 rounded-full mt-3 border border-white/10">
-                Fit Student ID barcode in box
+                Hold the barcode flat, about a hand&apos;s length away
               </p>
             </div>
           )}
@@ -454,6 +539,11 @@ export default function BarcodeScanPage() {
           )}
         </div>
 
+        {/* Raw scan readout (local development builds only) */}
+        {IS_DEV_BUILD && lastRawScan && (
+          <p className="text-[10px] font-mono text-slate-500 px-1">Last raw scan: {lastRawScan}</p>
+        )}
+
         {/* Hidden File Input for fallback photo scan */}
         <input
           type="file"
@@ -463,11 +553,11 @@ export default function BarcodeScanPage() {
           className="hidden"
         />
 
-        {/* Instructions & Fallback */}
+        {/* Instructions & Fallbacks */}
         <div className="flex items-center justify-between text-xs text-slate-500 px-1">
           <div className="flex items-center space-x-1.5">
             <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span className="font-medium text-[11px]">Instant 100% Barcode Checksum</span>
+            <span className="font-medium text-[11px]">Scanned on your phone. Nothing is uploaded.</span>
           </div>
 
           <button
@@ -479,6 +569,41 @@ export default function BarcodeScanPage() {
             <span>Upload Photo Instead</span>
           </button>
         </div>
+
+        {/* Typed index number (last option) */}
+        {showManualEntry ? (
+          <form onSubmit={handleManualSubmit} className="flex items-center gap-2 px-1">
+            <input
+              id="manual-index"
+              type="text"
+              inputMode="text"
+              autoCapitalize="characters"
+              autoComplete="off"
+              maxLength={7}
+              placeholder="e.g. 250373T"
+              value={manualIndex}
+              onChange={(e) => setManualIndex(e.target.value.toUpperCase())}
+              aria-label="Index number"
+              className="flex-1 px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-sky-400"
+            />
+            <button
+              type="submit"
+              disabled={isChecking}
+              className="py-2 px-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl font-bold text-xs transition disabled:opacity-50"
+            >
+              Continue
+            </button>
+          </form>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowManualEntry(true)}
+            className="text-[11px] font-bold text-slate-500 hover:text-sky-700 underline inline-flex items-center space-x-1 px-1"
+          >
+            <Keyboard className="w-3 h-3" />
+            <span>Can&apos;t scan? Type your index number</span>
+          </button>
+        )}
       </div>
 
       {/* Footer */}

@@ -72,8 +72,8 @@ export async function POST(request: Request) {
       })
       .eq('record_id', activeLoan.record_id);
 
-    // 5. Publish HiveMQ MQTT return unlock command (V1: 10-second window to insert umbrella)
-    const mqttResult = await publishReturnCommand(targetSlot, cleanIndex, 10000);
+    // 5. Publish HiveMQ MQTT return command to cabinet (Topic: astrix-umbrella/cabinet/command)
+    const mqttResult = await publishReturnCommand(targetSlot);
 
     // 6. Fetch user profile and send email receipt in background
     (async () => {

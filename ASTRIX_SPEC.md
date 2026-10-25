@@ -90,16 +90,15 @@
 
 ---
 
-## 📡 MQTT Interface Contracts (HiveMQ Cloud — Version 1 2×2 Architecture)
+## 📡 MQTT Interface Contracts (Astrix Umbrella Cabinet — Official Hardware Contract)
 
-* **Borrow Command Topic (Web Publishes ➔ ESP32 Subscribes):** `astrix/uom/kiosk-01/command/borrow`
-  * Payload: `{"action": "BORROW", "slot": 1, "duration_ms": 10000, "index_no": "250373T"}`
-* **Return Command Topic (Web Publishes ➔ ESP32 Subscribes):** `astrix/uom/kiosk-01/command/return`
-  * Payload: `{"action": "RETURN", "slot": 1, "duration_ms": 10000, "index_no": "250373T"}`
-* **Borrow Success Event Topic (ESP32 Publishes ➔ Web Subscribes):** `astrix/uom/kiosk-01/event/borrowed`
-  * Payload: `{"status": "SUCCESS", "slot": 1, "umbrella_id": "04A1B2C3D4", "index_no": "250373T"}`
-* **Return Success Event Topic (ESP32 Publishes ➔ Web Subscribes):** `astrix/uom/kiosk-01/event/returned`
-  * Payload: `{"status": "SUCCESS", "slot": 1, "umbrella_id": "04A1B2C3D4", "index_no": "250373T"}`
-* **Heartbeat Topic (ESP32 Publishes):** `astrix/uom/kiosk-01/status`
-  * Payload: `{"station_id": "kiosk-01", "online": true, "timestamp": 1792474441000}`
-  * Payload: `{"station_id": "kiosk-01", "online": true, "timestamp": 1792474441000}`
+* **Broker:** `broker.hivemq.com:1883` (QoS 0)
+* **Command Topic (Server ➔ ESP32):** `astrix-umbrella/cabinet/command`
+  * Borrow Command: `{"action": "BORROW", "slot": 1}`
+  * Return Command: `{"action": "RETURN", "slot": 1}`
+* **Response Topic (ESP32 ➔ Server):** `astrix-umbrella/cabinet/response`
+  * **Case 1 (Borrow Success):** `{"action": "BORROW", "slot": 1, "status": "SUCCESS", "message": "Umbrella taken from Slot 1. Closing the lock."}`
+  * **Case 2 (Borrow Fail - Not Taken):** `{"action": "BORROW", "slot": 1, "status": "FAIL", "reason": "NOT_TAKEN", "message": "Umbrella was NOT taken from Slot 1 after 5 checks. Closing the lock."}`
+  * **Case 3 (Return Success):** `{"action": "RETURN", "slot": 1, "status": "SUCCESS", "message": "Umbrella 1 returned to Slot 1. Closing the lock."}`
+  * **Case 4 (Return Fail - No Umbrella):** `{"action": "RETURN", "slot": 1, "status": "FAIL", "reason": "NO_UMBRELLA", "message": "No umbrella returned to Slot 1 after 5 checks. Closing the lock."}`
+  * **Case 5 (Return Fail - Wrong Umbrella):** `{"action": "RETURN", "slot": 1, "status": "FAIL", "reason": "WRONG_UMBRELLA", "message": "Wrong umbrella in Slot 1. Leaving the slot UNLOCKED - take it out and return Umbrella 1."}`

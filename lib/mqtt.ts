@@ -1,39 +1,38 @@
 import mqtt from 'mqtt';
 
 // =====================================================================
-// Version 1 (V1) Official 2x2 MQTT Topics
+// Astrix Umbrella Kiosk — Official Hardware MQTT Topics
 // =====================================================================
-// 1. Commands (Web App Publishes ➔ ESP32 Subscribes)
-export const MQTT_TOPIC_COMMAND_BORROW = 'astrix/uom/kiosk-01/command/borrow';
-export const MQTT_TOPIC_COMMAND_RETURN = 'astrix/uom/kiosk-01/command/return';
+// 1. Server ➔ ESP32 Command Topic
+export const MQTT_TOPIC_COMMAND = 'astrix-umbrella/cabinet/command';
 
-// 2. Events / Confirmations (ESP32 Publishes ➔ Web Worker Subscribes)
-export const MQTT_TOPIC_EVENT_BORROWED = 'astrix/uom/kiosk-01/event/borrowed';
-export const MQTT_TOPIC_EVENT_RETURNED = 'astrix/uom/kiosk-01/event/returned';
-
-// 3. Station Online Heartbeat
-export const MQTT_TOPIC_STATUS = 'astrix/uom/kiosk-01/status';
+// 2. ESP32 ➔ Server Response Topic
+export const MQTT_TOPIC_RESPONSE = 'astrix-umbrella/cabinet/response';
 
 // Backwards compatibility aliases
-export const MQTT_TOPIC_UNLOCK = MQTT_TOPIC_COMMAND_BORROW;
-export const MQTT_TOPIC_REMOVED = MQTT_TOPIC_EVENT_BORROWED;
+export const MQTT_TOPIC_COMMAND_BORROW = MQTT_TOPIC_COMMAND;
+export const MQTT_TOPIC_COMMAND_RETURN = MQTT_TOPIC_COMMAND;
+export const MQTT_TOPIC_EVENT_BORROWED = MQTT_TOPIC_RESPONSE;
+export const MQTT_TOPIC_EVENT_RETURNED = MQTT_TOPIC_RESPONSE;
+export const MQTT_TOPIC_UNLOCK = MQTT_TOPIC_COMMAND;
+export const MQTT_TOPIC_REMOVED = MQTT_TOPIC_RESPONSE;
+export const MQTT_TOPIC_STATUS = 'astrix-umbrella/cabinet/status';
 
-export interface KioskCommandPayload {
+export interface CabinetCommand {
   action: 'BORROW' | 'RETURN';
   slot: number;
-  duration_ms: number;
-  index_no: string;
 }
 
-export interface UnlockPayload {
-  action: 'BORROW_UNLOCK' | 'RETURN_UNLOCK' | 'BORROW' | 'RETURN';
+export interface CabinetResponse {
+  action: 'BORROW' | 'RETURN';
   slot: number;
-  duration_ms: number;
-  index_no: string;
+  status: 'SUCCESS' | 'FAIL';
+  reason?: 'NOT_TAKEN' | 'NO_UMBRELLA' | 'WRONG_UMBRELLA';
+  message: string;
 }
 
 /**
- * Universal MQTT Publisher to HiveMQ Cloud / Public Broker
+ * Universal MQTT Publisher to HiveMQ Cloud / Public Broker (QoS 0)
  */
 async function sendMqttMessage(
   topic: string,
@@ -83,7 +82,8 @@ async function sendMqttMessage(
       client = mqtt.connect(brokerUrl, options);
 
       client.on('connect', () => {
-        client?.publish(topic, payloadString, { qos: 1 }, (err) => {
+        // Hardware spec requires QoS 0
+        client?.publish(topic, payloadString, { qos: 0 }, (err) => {
           clearTimeout(timeout);
           if (!resolved) {
             resolved = true;
@@ -91,7 +91,7 @@ async function sendMqttMessage(
               console.warn('⚠️ [HiveMQ] Publish error:', err.message);
               resolve({ success: false, error: err.message });
             } else {
-              console.log('✅ [HiveMQ] Command delivered to broker successfully.');
+              console.log('✅ [HiveMQ] Command delivered to broker successfully (QoS 0).');
               resolve({ success: true, simulated: false });
             }
             client?.end();
@@ -120,52 +120,41 @@ async function sendMqttMessage(
 }
 
 /**
- * Publish Borrow Unlock Command to ESP32 (V1: astrix/uom/kiosk-01/command/borrow)
- * Default Duration: 10,000ms (10 seconds)
+ * Publish Borrow Trigger Command to ESP32 Cabinet
+ * Topic: astrix-umbrella/cabinet/command
+ * Payload: {"action": "BORROW", "slot": slot}
  */
-export async function publishBorrowCommand(
-  slot: number,
-  indexNo: string,
-  durationMs: number = 10000
-) {
-  const payload: KioskCommandPayload = {
+export async function publishBorrowCommand(slot: number, indexNo?: string) {
+  const payload: CabinetCommand = {
     action: 'BORROW',
     slot,
-    duration_ms: durationMs,
-    index_no: indexNo,
   };
-  return sendMqttMessage(MQTT_TOPIC_COMMAND_BORROW, payload);
+  return sendMqttMessage(MQTT_TOPIC_COMMAND, payload);
 }
 
 /**
- * Publish Return Unlock Command to ESP32 (V1: astrix/uom/kiosk-01/command/return)
- * Default Duration: 10,000ms (10 seconds)
+ * Publish Return Trigger Command to ESP32 Cabinet
+ * Topic: astrix-umbrella/cabinet/command
+ * Payload: {"action": "RETURN", "slot": slot}
  */
-export async function publishReturnCommand(
-  slot: number,
-  indexNo: string,
-  durationMs: number = 10000
-) {
-  const payload: KioskCommandPayload = {
+export async function publishReturnCommand(slot: number, indexNo?: string) {
+  const payload: CabinetCommand = {
     action: 'RETURN',
     slot,
-    duration_ms: durationMs,
-    index_no: indexNo,
   };
-  return sendMqttMessage(MQTT_TOPIC_COMMAND_RETURN, payload);
+  return sendMqttMessage(MQTT_TOPIC_COMMAND, payload);
 }
 
 /**
  * Universal unlock command (backward compatibility)
  */
 export async function publishUnlockCommand(
-  action: 'BORROW_UNLOCK' | 'RETURN_UNLOCK' | 'BORROW' | 'RETURN',
+  action: 'BORROW' | 'RETURN' | string,
   slot: number,
-  indexNo: string,
-  durationMs: number = 10000
+  indexNo?: string
 ) {
-  if (action === 'RETURN_UNLOCK' || action === 'RETURN') {
-    return publishReturnCommand(slot, indexNo, durationMs);
+  if (action === 'RETURN' || action === 'RETURN_UNLOCK') {
+    return publishReturnCommand(slot, indexNo);
   }
-  return publishBorrowCommand(slot, indexNo, durationMs);
+  return publishBorrowCommand(slot, indexNo);
 }

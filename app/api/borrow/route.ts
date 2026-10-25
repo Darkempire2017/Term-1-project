@@ -55,17 +55,20 @@ export async function POST(request: Request) {
 
     const { slot, umbrella_id } = availableSlot;
 
-    // 3. Publish HiveMQ MQTT solenoid borrow command (V1: 10-second unlock window)
-    const mqttResult = await publishBorrowCommand(slot, cleanIndex, 10000);
+    // 3. Mark the slot with the pending student index so worker knows who initiated the borrow
+    await supabaseAdmin
+      .from('umbrellas')
+      .update({ borrowed_user: cleanIndex })
+      .eq('slot', slot);
 
-    // Note: Do NOT mark umbrella as borrowed in DB yet.
-    // The loan is only created when the ESP32 detects the umbrella is physically off the rack (event/borrowed).
+    // 4. Publish HiveMQ MQTT command to cabinet (Topic: astrix-umbrella/cabinet/command)
+    const mqttResult = await publishBorrowCommand(slot);
+
     return NextResponse.json({
       success: true,
-      message: `Slot #${slot} unlocked for 10 seconds. Pull the umbrella to complete borrow.`,
+      message: `Slot #${slot} opening. Please pull the umbrella to complete your borrow.`,
       slot,
       umbrella_id,
-      duration_ms: 10000,
       mqtt: mqttResult,
     });
   } catch (error: any) {

@@ -108,7 +108,16 @@ export async function POST(request: Request) {
     const result = await runCabinetCommand('BORROW', claimed.slot);
 
     if (!result.ok) {
-      await releaseClaim();
+      if (result.error === 'TIMEOUT') {
+        // The command reached the broker, so the cabinet may still open this slot later.
+        // Keep the slot held (not offered to anyone) until staff check it, instead of
+        // freeing it and risking an umbrella leaving with no loan.
+        console.error(
+          `❌ [API/Borrow] No cabinet response for slot ${claimed.slot} (student ${indexNo}). Slot kept held — check the cabinet and clear umbrellas.borrowed_user by hand.`
+        );
+      } else {
+        await releaseClaim();
+      }
       return NextResponse.json(
         { success: false, message: cabinetErrorMessage(result.error, 'BORROW'), slot: claimed.slot },
         { status: result.error === 'TIMEOUT' ? 504 : 502 }

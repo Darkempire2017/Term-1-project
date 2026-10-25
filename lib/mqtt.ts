@@ -97,7 +97,10 @@ function attemptCabinetCommand(command: CabinetCommand, timeoutMs: number): Prom
       });
     });
 
-    client.on('message', (_topic, message) => {
+    client.on('message', (_topic, message, packet) => {
+      // A retained message was published earlier, not by the cabinet for this command.
+      // Accepting it would let an old or fake response complete a borrow/return.
+      if (packet.retain) return;
       try {
         const data = JSON.parse(message.toString()) as CabinetResponse;
         if (data.action === command.action && Number(data.slot) === command.slot) {

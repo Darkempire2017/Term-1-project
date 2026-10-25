@@ -3,11 +3,17 @@
  * Project ASTRIX — ESP32-S3 Umbrella Cabinet Firmware
  * University of Moratuwa (UoM)
  *
+ * All 4 slots run at the same time: each slot has its own job
+ * (opening -> checking -> reading tag -> locking) that loop() moves
+ * forward a little at a time, so the cabinet never sits waiting and
+ * keeps reading MQTT while slots are busy.
+ *
  * Hardware (pins verified on the assembled cabinet):
  *   - 4x servo locks       GPIO 4, 5, 6, 7    (LEDC channels 0-3)
  *   - 4x push buttons      GPIO 1, 2, 8, 9    (pressed while an umbrella is docked)
  *   - 4x RC522 RFID        SDA/SS 15, 16, 17, 18
  *                          shared SCK 11, MOSI 12, MISO 13, RST 14
+ *   Power the servos from a separate 5 V supply (shared GND): up to 4 can move at once.
  *
  * MQTT:
  *   - Subscribe: astrix-umbrella/cabinet/command   {"action":"BORROW"|"RETURN","slot":1-4}
@@ -18,6 +24,8 @@
  * Note: servos are driven with raw LEDC on explicit channels. ESP32Servo assigns
  * channels 8 and 9 to the 3rd and 4th servo on the ESP32-S3 (which only has 0-7),
  * so motors 3/4 mirrored motors 1/2. Don't switch back to ESP32Servo.
+ *
+ * The previous one-slot-at-a-time version is tagged v1.0-serial-cabinet.
  * =====================================================================
  */
 
@@ -29,6 +37,7 @@
 #include <esp_arduino_version.h>
 
 // ===== WiFi - type your WiFi name and password between the quotes =====
+// (do this in a copy outside the repo folder so the real values are never committed)
 const char* WIFI_SSID     = "";
 const char* WIFI_PASSWORD = "";
 
@@ -88,7 +97,7 @@ const char* UMBRELLA_UIDS[NUM_SLOTS] = {
   "53 09 B8 CC 33 00 01"  // Umbrella 4
 };
 
-// Results from umbrellaOnReader() besides an umbrella number (0-3)
+// Results from tag reads besides an umbrella number (0-3)
 const int NO_TAG      = -1;
 const int UNKNOWN_TAG = -2;
 
@@ -99,7 +108,10 @@ const unsigned long holdTime      = 2000; // button must stay pressed/unpressed 
 const unsigned long tagScanWindow = 500;  // keep trying to read the tag for this long
 const unsigned long stepInterval  = 15;   // ms per 1 degree of servo movement
 
+// Servo positions (moved 1 degree at a time by updateServos)
 int currentPosition[NUM_SLOTS];
+int targetPosition[NUM_SLOTS];
+unsigned long lastStepTime[NUM_SLOTS];
 
 // Outcome of a borrow/return, sent back over MQTT
 struct Result {
@@ -107,6 +119,20 @@ struct Result {
   const char* reason; // only used when success is false
   String message;
 };
+
+// One job per slot
+enum Phase { SLOT_IDLE, SLOT_OPENING, SLOT_CHECKING, SLOT_READING, SLOT_LOCKING };
+
+struct SlotJob {
+  Phase phase = SLOT_IDLE;
+  bool isBorrow = false;
+  int check = 0;                 // current check number (1-5)
+  unsigned long windowStart = 0; // start of the current button window or tag read
+  bool stayed = true;            // button stayed in the required state this window
+  bool wrongUmbrella = false;    // last check found a wrong umbrella (returns only)
+};
+
+SlotJob jobs[NUM_SLOTS];
 
 // Command received over MQTT, run from loop() rather than inside the callback
 String pendingCommand = "";
@@ -135,28 +161,24 @@ void servoWrite(int i, int angle) {
 #endif
 }
 
-// Sweep lock i to the target angle
-void moveServo(int i, int target) {
-  int step = (target > currentPosition[i]) ? 1 : -1;
-  for (int pos = currentPosition[i]; pos != target; pos += step) {
-    servoWrite(i, pos);
-    delay(stepInterval);
+// Moves each servo 1 degree toward its target every stepInterval ms,
+// so all locks can open and close at the same time
+void updateServos() {
+  unsigned long now = millis();
+  for (int i = 0; i < NUM_SLOTS; i++) {
+    if (currentPosition[i] != targetPosition[i] && (now - lastStepTime[i]) >= stepInterval) {
+      currentPosition[i] += (targetPosition[i] > currentPosition[i]) ? 1 : -1;
+      servoWrite(i, currentPosition[i]);
+      lastStepTime[i] = now;
+    }
   }
-  servoWrite(i, target);
-  currentPosition[i] = target;
 }
 
-void unlock(int slot) {
-  Serial.printf("Unlocking Slot %d...\n", slot + 1);
-  moveServo(slot, LOCK_OPEN);
+bool servoArrived(int i) {
+  return currentPosition[i] == targetPosition[i];
 }
 
-void lock(int slot) {
-  moveServo(slot, LOCK_CLOSED);
-  Serial.printf("Slot %d locked.\n", slot + 1);
-}
-
-// ===================== RFID & buttons =====================
+// ===================== RFID =====================
 
 // Single attempt to read a tag on one reader; returns true and fills tagUID if found
 bool tryReadCard(MFRC522 &rfid, String &tagUID) {
@@ -184,124 +206,171 @@ bool tryReadCard(MFRC522 &rfid, String &tagUID) {
   return true;
 }
 
-// Which umbrella is on this slot's reader: 0-3, NO_TAG, or UNKNOWN_TAG
-int umbrellaOnReader(int slot) {
-  unsigned long scanStart = millis();
-  while ((millis() - scanStart) < tagScanWindow) {
-    String tagUID;
-    if (tryReadCard(readers[slot], tagUID)) {
-      for (int u = 0; u < NUM_SLOTS; u++) {
-        if (tagUID == UMBRELLA_UIDS[u]) return u;
-      }
-      return UNKNOWN_TAG;
-    }
-    delay(20);
+// Which umbrella a tag belongs to: 0-3, or UNKNOWN_TAG
+int umbrellaIndex(const String &tagUID) {
+  for (int u = 0; u < NUM_SLOTS; u++) {
+    if (tagUID == UMBRELLA_UIDS[u]) return u;
   }
-  return NO_TAG;
+  return UNKNOWN_TAG;
 }
 
-// Watches the button for the full time; true if it stayed in this state
-// the whole time (LOW = pressed, HIGH = unpressed)
-bool buttonStayed(int slot, int state, unsigned long ms) {
-  bool stayed = true;
-  unsigned long start = millis();
-  while ((millis() - start) < ms) {
-    if (digitalRead(BUTTON_PINS[slot]) != state) stayed = false;
-    delay(10);
-  }
-  return stayed;
+// ===================== Slot jobs =====================
+
+void startCheck(int slot, int checkNumber) {
+  SlotJob &job = jobs[slot];
+  job.check = checkNumber;
+  job.windowStart = millis();
+  job.stayed = true;
+  job.wrongUmbrella = false;
+  job.phase = SLOT_CHECKING;
+  Serial.printf("Slot %d check %d/%d...\n", slot + 1, checkNumber,
+                job.isBorrow ? BORROW_CHECKS : RETURN_CHECKS);
 }
 
-// ===================== Borrow & Return =====================
-
-// Borrow: unlock, check up to 5 times whether the umbrella was taken, then lock again.
-Result borrow(int slot) {
-  Serial.printf("=== Borrow from Slot %d ===\n", slot + 1);
-  unlock(slot);
-
-  bool taken = false;
-  for (int check = 1; check <= BORROW_CHECKS && !taken; check++) {
-    Serial.printf("Check %d/%d...\n", check, BORROW_CHECKS);
-
-    // Only check the tag once the button has been unpressed for 2 seconds
-    if (!buttonStayed(slot, HIGH, holdTime)) {
-      Serial.println("  Button still pressed - umbrella is still in the slot.");
-    } else if (umbrellaOnReader(slot) >= 0) {
-      Serial.println("  Button released, but the umbrella tag is still detected.");
-    } else {
-      taken = true; // Button unpressed AND no umbrella tag -> umbrella is gone
-    }
-  }
-
+// Decide the result, send it, then lock (or leave a wrong umbrella's slot open)
+void finishJob(int slot, bool success) {
+  SlotJob &job = jobs[slot];
   char msg[160];
   Result res;
-  if (taken) {
-    snprintf(msg, sizeof(msg), "Umbrella taken from Slot %d. Closing the lock.", slot + 1);
-    res = { true, "", msg };
-  } else {
-    snprintf(msg, sizeof(msg), "Umbrella was NOT taken from Slot %d after %d checks. Closing the lock.",
-             slot + 1, BORROW_CHECKS);
-    res = { false, "NOT_TAKEN", msg };
-  }
-  Serial.println(msg);
-  lock(slot);
-  return res;
-}
+  bool keepOpen = false;
 
-// Return: unlock, check up to 5 times whether this slot's umbrella was put back.
-// Locks again afterwards, unless a wrong umbrella is still in the slot.
-Result returnUmbrella(int slot) {
-  Serial.printf("=== Return to Slot %d ===\n", slot + 1);
-  unlock(slot);
-
-  bool returned = false;
-  bool wrongUmbrella = false;
-  for (int check = 1; check <= RETURN_CHECKS && !returned; check++) {
-    Serial.printf("Check %d/%d...\n", check, RETURN_CHECKS);
-    wrongUmbrella = false;
-
-    // Only read the tag once the button has been pressed for 2 seconds
-    if (!buttonStayed(slot, LOW, holdTime)) {
-      Serial.println("  No umbrella in the slot yet.");
-      continue;
-    }
-
-    int found = umbrellaOnReader(slot);
-    if (found == slot) {
-      returned = true; // Right umbrella is in the slot
-    } else if (found == NO_TAG) {
-      Serial.println("  Button pressed, but no umbrella tag detected.");
-    } else if (found == UNKNOWN_TAG) {
-      wrongUmbrella = true;
-      Serial.printf("  Wrong umbrella! This is not Umbrella %d.\n", slot + 1);
+  if (job.isBorrow) {
+    if (success) {
+      snprintf(msg, sizeof(msg), "Umbrella taken from Slot %d. Closing the lock.", slot + 1);
+      res = { true, "", msg };
     } else {
-      wrongUmbrella = true;
-      Serial.printf("  Wrong umbrella! This is Umbrella %d, but Slot %d takes Umbrella %d.\n",
-                    found + 1, slot + 1, slot + 1);
+      snprintf(msg, sizeof(msg), "Umbrella was NOT taken from Slot %d after %d checks. Closing the lock.",
+               slot + 1, BORROW_CHECKS);
+      res = { false, "NOT_TAKEN", msg };
     }
-  }
-
-  char msg[160];
-  Result res;
-  if (returned) {
+  } else if (success) {
     snprintf(msg, sizeof(msg), "Umbrella %d returned to Slot %d. Closing the lock.", slot + 1, slot + 1);
     res = { true, "", msg };
-    Serial.println(msg);
-    lock(slot);
-  } else if (wrongUmbrella) {
+  } else if (job.wrongUmbrella) {
     // Leave it open so the wrong umbrella can be taken back out
     snprintf(msg, sizeof(msg), "Wrong umbrella in Slot %d. Leaving the slot UNLOCKED - take it out and return Umbrella %d.",
              slot + 1, slot + 1);
     res = { false, "WRONG_UMBRELLA", msg };
-    Serial.println(msg);
+    keepOpen = true;
   } else {
     snprintf(msg, sizeof(msg), "No umbrella returned to Slot %d after %d checks. Closing the lock.",
              slot + 1, RETURN_CHECKS);
     res = { false, "NO_UMBRELLA", msg };
-    Serial.println(msg);
-    lock(slot);
   }
-  return res;
+
+  Serial.println(msg);
+  publishResult(job.isBorrow ? "BORROW" : "RETURN", slot + 1, res);
+
+  if (keepOpen) {
+    job.phase = SLOT_IDLE;
+  } else {
+    targetPosition[slot] = LOCK_CLOSED;
+    job.phase = SLOT_LOCKING;
+  }
+}
+
+void nextCheck(int slot) {
+  SlotJob &job = jobs[slot];
+  int maxChecks = job.isBorrow ? BORROW_CHECKS : RETURN_CHECKS;
+  if (job.check < maxChecks) {
+    startCheck(slot, job.check + 1);
+  } else {
+    finishJob(slot, false);
+  }
+}
+
+// Called with the tag result once a check's button window has passed
+void evaluateTag(int slot, int found) {
+  SlotJob &job = jobs[slot];
+
+  if (job.isBorrow) {
+    if (found < 0) {
+      finishJob(slot, true); // Button unpressed AND no umbrella tag -> umbrella is gone
+      return;
+    }
+    Serial.printf("  Slot %d: button released, but the umbrella tag is still detected.\n", slot + 1);
+  } else {
+    if (found == slot) {
+      finishJob(slot, true); // Right umbrella is in the slot
+      return;
+    }
+    if (found == NO_TAG) {
+      Serial.printf("  Slot %d: button pressed, but no umbrella tag detected.\n", slot + 1);
+    } else if (found == UNKNOWN_TAG) {
+      job.wrongUmbrella = true;
+      Serial.printf("  Slot %d: wrong umbrella! This is not Umbrella %d.\n", slot + 1, slot + 1);
+    } else {
+      job.wrongUmbrella = true;
+      Serial.printf("  Slot %d: wrong umbrella! This is Umbrella %d, but Slot %d takes Umbrella %d.\n",
+                    slot + 1, found + 1, slot + 1, slot + 1);
+    }
+  }
+  nextCheck(slot);
+}
+
+// Moves one slot's job forward; never waits
+void updateJob(int slot) {
+  SlotJob &job = jobs[slot];
+  unsigned long now = millis();
+
+  switch (job.phase) {
+    case SLOT_IDLE:
+      return;
+
+    case SLOT_OPENING:
+      if (servoArrived(slot)) startCheck(slot, 1);
+      return;
+
+    case SLOT_CHECKING: {
+      // Borrow: button must stay released (umbrella gone). Return: must stay pressed.
+      int required = job.isBorrow ? HIGH : LOW;
+      if (digitalRead(BUTTON_PINS[slot]) != required) job.stayed = false;
+      if (now - job.windowStart < holdTime) return;
+
+      if (!job.stayed) {
+        Serial.printf(job.isBorrow ? "  Slot %d: button still pressed - umbrella is still in the slot.\n"
+                                   : "  Slot %d: no umbrella in the slot yet.\n",
+                      slot + 1);
+        nextCheck(slot);
+        return;
+      }
+      // Button was right for the whole window: read the tag next
+      job.phase = SLOT_READING;
+      job.windowStart = now;
+      return;
+    }
+
+    case SLOT_READING: {
+      String tagUID;
+      if (tryReadCard(readers[slot], tagUID)) {
+        evaluateTag(slot, umbrellaIndex(tagUID));
+      } else if (now - job.windowStart >= tagScanWindow) {
+        evaluateTag(slot, NO_TAG);
+      }
+      return;
+    }
+
+    case SLOT_LOCKING:
+      if (servoArrived(slot)) {
+        job.phase = SLOT_IDLE;
+        Serial.printf("Slot %d locked.\n", slot + 1);
+      }
+      return;
+  }
+}
+
+// Start a borrow/return on one slot; other slots keep running
+void startJob(int slot, bool isBorrow) {
+  SlotJob &job = jobs[slot];
+  if (job.phase != SLOT_IDLE) {
+    Serial.printf("Ignored: Slot %d is already busy.\n", slot + 1);
+    return;
+  }
+  job = SlotJob();
+  job.isBorrow = isBorrow;
+  job.phase = SLOT_OPENING;
+  targetPosition[slot] = LOCK_OPEN;
+  Serial.printf("=== %s Slot %d === Unlocking...\n", isBorrow ? "Borrow from" : "Return to", slot + 1);
 }
 
 // ===================== WiFi & MQTT =====================
@@ -368,7 +437,7 @@ void publishResult(const char* action, int slotNumber, const Result &res) {
   }
 }
 
-// Check the action and slot, run it, and send the result.
+// Check the action and slot, then start the job.
 // Invalid commands are only logged here - the response topic only carries the 5 standard responses.
 void runAction(String action, int slotNumber) {
   action.toUpperCase();
@@ -382,8 +451,7 @@ void runAction(String action, int slotNumber) {
     return;
   }
 
-  Result res = (action == "BORROW") ? borrow(slotNumber - 1) : returnUmbrella(slotNumber - 1);
-  publishResult(action.c_str(), slotNumber, res);
+  startJob(slotNumber - 1, action == "BORROW");
 }
 
 // Parse a JSON command like {"action": "BORROW", "slot": 1}
@@ -411,6 +479,8 @@ void setup() {
     // Servo Setup - every lock starts closed
     servoAttach(i);
     currentPosition[i] = LOCK_CLOSED;
+    targetPosition[i] = LOCK_CLOSED;
+    lastStepTime[i] = 0;
     servoWrite(i, LOCK_CLOSED);
 
     // Configure switch pin to use internal pull-up resistor
@@ -441,7 +511,7 @@ void setup() {
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setCallback(onMqttMessage);
   mqtt.setBufferSize(512);
-  mqtt.setKeepAlive(60); // borrow/return block for ~20 s, so keep the connection alive longer
+  mqtt.setKeepAlive(60);
   if (WiFi.status() == WL_CONNECTED) connectMqtt();
   lastMqttAttempt = millis();
 
@@ -456,7 +526,7 @@ void loop() {
   }
   mqtt.loop();
 
-  // Run a command that arrived over MQTT
+  // Start a command that arrived over MQTT (slots that are already busy keep running)
   if (pendingCommand.length() > 0) {
     String cmd = pendingCommand;
     pendingCommand = "";
@@ -473,4 +543,10 @@ void loop() {
       else if (cmd[0] == 'r') runAction("RETURN", cmd[1] - '0');
     }
   }
+
+  // Move every slot's job and lock forward a little
+  for (int s = 0; s < NUM_SLOTS; s++) {
+    updateJob(s);
+  }
+  updateServos();
 }

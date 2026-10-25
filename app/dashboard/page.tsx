@@ -18,8 +18,10 @@ import { BottomNav } from '@/components/BottomNav';
 import type { MeResponse, PublicSlot } from '@/lib/types';
 import { useViewMode } from '@/components/ViewModeContext';
 
-// Seconds the cabinet gives the student to take the umbrella (5 checks × ~2.5 s)
-const TAKE_WINDOW_SECONDS = 13;
+// The lock takes ~4 s to open (message delivery + 2.7 s servo turn); the countdown
+// starts after that. Then the cabinet gives the student 5 checks × ~2.5 s.
+const OPENING_MS = 4000;
+const TAKE_WINDOW_SECONDS = 12;
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -47,6 +49,7 @@ export default function DashboardPage() {
   const [unlockCountdown, setUnlockCountdown] = useState<number | null>(null);
   const [pendingSlot, setPendingSlot] = useState<number | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const openingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notification, setNotification] = useState<{
     type: 'success' | 'info' | 'error';
     text: string;
@@ -116,6 +119,8 @@ export default function DashboardPage() {
   }, [refreshStationData]);
 
   const stopCountdown = () => {
+    if (openingTimerRef.current) clearTimeout(openingTimerRef.current);
+    openingTimerRef.current = null;
     if (countdownRef.current) clearInterval(countdownRef.current);
     countdownRef.current = null;
     setUnlockCountdown(null);
@@ -164,13 +169,16 @@ export default function DashboardPage() {
     });
 
     if (kind === 'borrow') {
-      let remaining = TAKE_WINDOW_SECONDS;
-      setUnlockCountdown(remaining);
-      countdownRef.current = setInterval(() => {
-        remaining -= 1;
-        if (remaining > 0) setUnlockCountdown(remaining);
-        else stopCountdown();
-      }, 1000);
+      // Start the "take it now" countdown once the lock has had time to open
+      openingTimerRef.current = setTimeout(() => {
+        let remaining = TAKE_WINDOW_SECONDS;
+        setUnlockCountdown(remaining);
+        countdownRef.current = setInterval(() => {
+          remaining -= 1;
+          if (remaining > 0) setUnlockCountdown(remaining);
+          else stopCountdown();
+        }, 1000);
+      }, OPENING_MS);
     }
 
     try {

@@ -23,6 +23,55 @@ import { useViewMode } from '@/components/ViewModeContext';
 const OPENING_MS = 4000;
 const TAKE_WINDOW_SECONDS = 12;
 
+interface AssignedSlot {
+  slot: number;
+  umbrella_number: number;
+  umbrella_id: string;
+}
+
+/**
+ * Reads a cabinet API response. Student borrows stream NDJSON: an "assigned" line
+ * (which slot this student got) as soon as the slot is reserved, then a "result"
+ * line when the cabinet answers. Everything else is a single JSON body.
+ */
+async function readCabinetResponse(
+  res: Response,
+  onAssigned: (assigned: AssignedSlot) => void
+): Promise<{ success?: boolean; message?: string; reason?: string; slot?: number }> {
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/x-ndjson') || !res.body) {
+    return res.json();
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let newline;
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line) continue;
+      const event = JSON.parse(line);
+      if (event.type === 'assigned') onAssigned(event);
+      else if (event.type === 'result') result = event;
+    }
+  }
+
+  return (
+    result ?? {
+      success: false,
+      message: 'The connection to the station was lost before the cabinet answered. Check the dashboard in a moment.',
+    }
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { isStudentMode } = useViewMode();
@@ -149,8 +198,23 @@ export default function DashboardPage() {
     return `${hours}h ${remMins}m ago`;
   };
 
+  // Start the "take it now" countdown once the lock has had time to open
+  const startTakeCountdown = () => {
+    openingTimerRef.current = setTimeout(() => {
+      let remaining = TAKE_WINDOW_SECONDS;
+      setUnlockCountdown(remaining);
+      countdownRef.current = setInterval(() => {
+        remaining -= 1;
+        if (remaining > 0) setUnlockCountdown(remaining);
+        else stopCountdown();
+      }, 1000);
+    }, OPENING_MS);
+  };
+
   // Shared request runner: the server sends the command, waits for the cabinet,
-  // records the result, and answers with the cabinet's message
+  // records the result, and answers with the cabinet's message.
+  // For a borrow, the server first tells us which slot we got (it may not be the
+  // one shown as "next free" if someone else borrowed at the same moment).
   const runCabinetAction = async (
     kind: 'borrow' | 'return',
     slotHint: number | null,
@@ -159,27 +223,14 @@ export default function DashboardPage() {
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     setActionInProgress(kind);
     setScreenGlow(kind === 'borrow' ? 'green' : 'blue');
-    setPendingSlot(slotHint);
+    setPendingSlot(kind === 'borrow' ? null : slotHint);
     setNotification({
       type: 'info',
       text:
         kind === 'borrow'
-          ? `🔓 Opening ${slotHint ? `Slot #${slotHint}` : 'the next free slot'}… Take the umbrella when the lock opens.`
+          ? '🔎 Finding a free slot for you…'
           : `🔓 Opening ${slotHint ? `Slot #${slotHint}` : 'your slot'}… Dock the umbrella and wait for lock confirmation.`,
     });
-
-    if (kind === 'borrow') {
-      // Start the "take it now" countdown once the lock has had time to open
-      openingTimerRef.current = setTimeout(() => {
-        let remaining = TAKE_WINDOW_SECONDS;
-        setUnlockCountdown(remaining);
-        countdownRef.current = setInterval(() => {
-          remaining -= 1;
-          if (remaining > 0) setUnlockCountdown(remaining);
-          else stopCountdown();
-        }, 1000);
-      }, OPENING_MS);
-    }
 
     try {
       const res = await fetch(`/api/${kind}`, {
@@ -187,9 +238,16 @@ export default function DashboardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const json = await res.json();
+      const json = await readCabinetResponse(res, (assigned) => {
+        setPendingSlot(assigned.slot);
+        setNotification({
+          type: 'info',
+          text: `🔓 Take Umbrella ${assigned.umbrella_number} from Slot ${assigned.slot}. The lock is opening now.`,
+        });
+        startTakeCountdown();
+      });
 
-      if (res.ok && json.success) {
+      if (json.success) {
         setScreenGlow(null);
         setNotification({ type: 'success', text: `✅ ${json.message}` });
       } else if (json.reason === 'WRONG_UMBRELLA') {
@@ -645,6 +703,29 @@ export default function DashboardPage() {
           /* STATE A: "WHEN BORROWING" (Standard Student View)                            */
           /* ============================================================================ */
           <div className="space-y-4">
+            {/* Assigned Slot Card: which umbrella THIS student must take */}
+            {actionInProgress === 'borrow' && (
+              <div
+                className="bg-white border-2 border-emerald-400 rounded-3xl p-5 shadow-lg shadow-emerald-500/20 text-center space-y-1"
+                aria-live="polite"
+              >
+                {pendingSlot ? (
+                  <>
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">Your umbrella</p>
+                    <p className="text-4xl font-black text-slate-900 font-mono">Slot {pendingSlot}</p>
+                    <p className="text-sm font-bold text-slate-700">
+                      Take Umbrella {pendingSlot}, only from this slot
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {unlockCountdown !== null ? `${unlockCountdown}s left to take it` : 'The lock is opening…'}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm font-bold text-slate-600 py-3">Finding a free slot for you…</p>
+                )}
+              </div>
+            )}
+
             {/* State Banner */}
             <div className="bg-gradient-to-br from-sky-600 to-sky-700 text-white p-5 rounded-3xl shadow-lg shadow-sky-600/20 space-y-3 relative overflow-hidden">
               <div className="flex items-center justify-between">
@@ -682,7 +763,9 @@ export default function DashboardPage() {
 
               <div className="grid grid-cols-4 gap-2">
                 {slots.map((s) => {
-                  const isReady = nextAvailableSlot?.slot === s.slot;
+                  // While borrowing, highlight the slot the server gave this student
+                  const isMine = actionInProgress === 'borrow' && pendingSlot === s.slot;
+                  const isReady = actionInProgress === 'borrow' ? isMine : nextAvailableSlot?.slot === s.slot;
                   return (
                     <div
                       key={s.slot}
@@ -709,7 +792,7 @@ export default function DashboardPage() {
                           s.availability ? 'text-emerald-700' : 'text-slate-400'
                         }`}
                       >
-                        {s.availability ? 'Ready' : 'Out'}
+                        {isMine ? 'Yours' : s.availability ? 'Ready' : 'Out'}
                       </span>
                     </div>
                   );
@@ -778,14 +861,14 @@ export default function DashboardPage() {
               {unlockCountdown !== null ? (
                 <>
                   <Unlock className="w-5 h-5 animate-bounce" />
-                  <span>Slot #{pendingSlot ?? nextAvailableSlot?.slot} opening — take the umbrella ({unlockCountdown}s)</span>
+                  <span>Take Umbrella {pendingSlot} from Slot {pendingSlot} ({unlockCountdown}s)</span>
                 </>
               ) : actionInProgress === 'borrow' ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : !activeLoan ? (
                 <>
                   <Unlock className="w-4 h-4" />
-                  <span>Borrow Umbrella ({nextAvailableSlot ? `Slot ${nextAvailableSlot.slot}` : 'Unavailable'})</span>
+                  <span>{nextAvailableSlot ? 'Borrow Umbrella' : 'Borrow Umbrella (Unavailable)'}</span>
                 </>
               ) : (
                 <>

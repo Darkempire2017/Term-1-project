@@ -10,8 +10,12 @@ import { findOpenLoan } from '@/lib/loans';
 export const maxDuration = 60;
 
 /**
- * Borrow: claim a free slot, send BORROW to the cabinet, wait for its response,
- * and only then record the loan. Nothing is written from the browser.
+ * Borrow: claim a free slot, tell the phone which slot it got, send BORROW to the
+ * cabinet, wait for its response, and only then record the loan.
+ * Nothing is written from the browser.
+ *
+ * Students get a streamed NDJSON response (see below). Errors before a slot is
+ * assigned, and developer-console borrows, are plain JSON.
  */
 export async function POST(request: Request) {
   try {
@@ -97,88 +101,141 @@ export async function POST(request: Request) {
       );
     }
 
-    const releaseClaim = () =>
-      supabaseAdmin
-        .from('umbrellas')
-        .update({ borrowed_user: null })
-        .eq('slot', claimed!.slot)
-        .eq('availability', true)
-        .eq('borrowed_user', indexNo);
+    // Stream two lines of JSON (NDJSON) on the same response:
+    //   1. {"type":"assigned",...} straight away, so the phone shows the right slot
+    //      while the lock is still opening (two students borrowing at once get
+    //      different slots and each must know which one is theirs)
+    //   2. {"type":"result",...} once the cabinet has answered
+    const slot = claimed;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (event: Record<string, unknown>) => {
+          try {
+            controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
+          } catch {
+            // The phone disconnected; keep going so the loan is still recorded correctly
+          }
+        };
 
-    const result = await runCabinetCommand('BORROW', claimed.slot);
+        send({
+          type: 'assigned',
+          slot: slot.slot,
+          umbrella_number: slot.slot, // each umbrella lives in its own numbered slot
+          umbrella_id: slot.umbrella_id,
+        });
 
-    if (!result.ok) {
-      if (result.error === 'TIMEOUT') {
-        // The command reached the broker, so the cabinet may still open this slot later.
-        // Keep the slot held (not offered to anyone) until staff check it, instead of
-        // freeing it and risking an umbrella leaving with no loan.
-        console.error(
-          `❌ [API/Borrow] No cabinet response for slot ${claimed.slot} (student ${indexNo}). Slot kept held — check the cabinet and clear umbrellas.borrowed_user by hand.`
-        );
-      } else {
-        await releaseClaim();
-      }
-      return NextResponse.json(
-        { success: false, message: cabinetErrorMessage(result.error, 'BORROW'), slot: claimed.slot },
-        { status: result.error === 'TIMEOUT' ? 504 : 502 }
-      );
-    }
+        let outcome: Record<string, unknown>;
+        try {
+          outcome = await completeBorrow(indexNo, slot);
+        } catch (error) {
+          console.error('❌ [API/Borrow] Error:', error);
+          outcome = { success: false, message: 'Borrow request failed. Please try again.', slot: slot.slot };
+        }
+        send({ type: 'result', ...outcome });
 
-    // Case 2: the umbrella was not taken — free the slot again
-    if (result.response.status !== 'SUCCESS') {
-      await releaseClaim();
-      return NextResponse.json({
-        success: false,
-        message: result.response.message,
-        reason: result.response.reason,
-        slot: claimed.slot,
-      });
-    }
-
-    // Case 1: umbrella taken — record the loan
-    const now = new Date();
-    const dueTime = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24h window
-
-    await supabaseAdmin
-      .from('umbrellas')
-      .update({ availability: false, borrowed_user: indexNo })
-      .eq('slot', claimed.slot);
-
-    const { error: insertError } = await supabaseAdmin.from('borrow_records').insert({
-      umbrella_id: claimed.umbrella_id,
-      index_no: indexNo,
-      status: 'ACTIVE',
-      borrowed_time: now.toISOString(),
-      due_time: dueTime.toISOString(),
+        try {
+          controller.close();
+        } catch {}
+      },
     });
 
-    if (insertError) {
-      console.error('❌ [API/Borrow] Loan insert error:', insertError.message);
-    }
-
-    // Borrow receipt email
-    try {
-      const { data: user } = await supabaseAdmin
-        .from('users')
-        .select('email, username')
-        .eq('index_no', indexNo)
-        .maybeSingle();
-      if (user?.email) {
-        await sendBorrowReceiptEmail(user.email, user.username || 'Student', claimed.slot, claimed.umbrella_id, dueTime);
-      }
-    } catch (e) {
-      console.warn('⚠️ [API/Borrow] Receipt email warning:', e);
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: result.response.message,
-      slot: claimed.slot,
-      umbrella_id: claimed.umbrella_id,
-      due_time: dueTime.toISOString(),
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'X-Accel-Buffering': 'no',
+      },
     });
   } catch (error: any) {
     console.error('❌ [API/Borrow] Error:', error);
     return NextResponse.json({ success: false, message: 'Borrow request failed. Please try again.' }, { status: 500 });
   }
+}
+
+/**
+ * Sends BORROW for the claimed slot, waits for the cabinet, and records the result.
+ * Returns the final result body for the phone.
+ */
+async function completeBorrow(
+  indexNo: string,
+  claimed: { slot: number; umbrella_id: string }
+): Promise<Record<string, unknown>> {
+  const releaseClaim = () =>
+    supabaseAdmin
+      .from('umbrellas')
+      .update({ borrowed_user: null })
+      .eq('slot', claimed.slot)
+      .eq('availability', true)
+      .eq('borrowed_user', indexNo);
+
+  const result = await runCabinetCommand('BORROW', claimed.slot);
+
+  if (!result.ok) {
+    if (result.error === 'TIMEOUT') {
+      // The command reached the broker, so the cabinet may still open this slot later.
+      // Keep the slot held (not offered to anyone) until staff check it, instead of
+      // freeing it and risking an umbrella leaving with no loan.
+      console.error(
+        `❌ [API/Borrow] No cabinet response for slot ${claimed.slot} (student ${indexNo}). Slot kept held — check the cabinet and clear umbrellas.borrowed_user by hand.`
+      );
+    } else {
+      await releaseClaim();
+    }
+    return { success: false, message: cabinetErrorMessage(result.error, 'BORROW'), slot: claimed.slot };
+  }
+
+  // Case 2: the umbrella was not taken — free the slot again
+  if (result.response.status !== 'SUCCESS') {
+    await releaseClaim();
+    return {
+      success: false,
+      message: result.response.message,
+      reason: result.response.reason,
+      slot: claimed.slot,
+    };
+  }
+
+  // Case 1: umbrella taken — record the loan
+  const now = new Date();
+  const dueTime = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24h window
+
+  await supabaseAdmin
+    .from('umbrellas')
+    .update({ availability: false, borrowed_user: indexNo })
+    .eq('slot', claimed.slot);
+
+  const { error: insertError } = await supabaseAdmin.from('borrow_records').insert({
+    umbrella_id: claimed.umbrella_id,
+    index_no: indexNo,
+    status: 'ACTIVE',
+    borrowed_time: now.toISOString(),
+    due_time: dueTime.toISOString(),
+  });
+
+  if (insertError) {
+    console.error('❌ [API/Borrow] Loan insert error:', insertError.message);
+  }
+
+  // Borrow receipt email
+  try {
+    const { data: user } = await supabaseAdmin
+      .from('users')
+      .select('email, username')
+      .eq('index_no', indexNo)
+      .maybeSingle();
+    if (user?.email) {
+      await sendBorrowReceiptEmail(user.email, user.username || 'Student', claimed.slot, claimed.umbrella_id, dueTime);
+    }
+  } catch (e) {
+    console.warn('⚠️ [API/Borrow] Receipt email warning:', e);
+  }
+
+  return {
+    success: true,
+    message: result.response.message,
+    slot: claimed.slot,
+    umbrella_id: claimed.umbrella_id,
+    due_time: dueTime.toISOString(),
+  };
 }

@@ -5,7 +5,6 @@ import { sendBorrowReceiptEmail } from '@/lib/email';
 import { getSessionIndex } from '@/lib/session';
 import { isDevIndex } from '@/lib/dev';
 import { findOpenLoan } from '@/lib/loans';
-import { rateLimit } from '@/lib/rate-limit';
 
 // The cabinet takes up to ~20 s to report the result, so allow the route to wait
 export const maxDuration = 60;
@@ -21,13 +20,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, message: 'Please sign in to borrow an umbrella.' }, { status: 401 });
     }
 
-    if (!rateLimit(`borrow:${indexNo}`, 5, 10 * 60 * 1000)) {
-      return NextResponse.json(
-        { success: false, message: 'Too many borrow attempts. Please wait a few minutes.' },
-        { status: 429 }
-      );
-    }
-
+    // No attempt limit on borrows for now: a student must be able to retry at the
+    // cabinet, and the one-open-loan rule already stops anyone taking more than one
     const body = await request.json().catch(() => ({}));
     const isDev = isDevIndex(indexNo);
 

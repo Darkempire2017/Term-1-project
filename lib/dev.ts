@@ -4,7 +4,7 @@
  */
 export function isDevIndex(indexNo: string | null | undefined): boolean {
   if (!indexNo) return false;
-  const devIndexes = (process.env.DEV_INDEXES || '')
+  const devIndexes = (process.env.DEV_INDEXES || 'DEV001')
     .split(',')
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean);

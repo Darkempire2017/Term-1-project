@@ -28,6 +28,8 @@ ASTRIX is a campus umbrella-sharing cabinet. Students register by scanning their
 
 Returns work the same way through `POST /api/return`. The return slot always comes from the student's loan (each umbrella has a home slot). The browser never writes to the database.
 
+The cabinet runs all 4 slots at the same time, so several students can borrow or return at once (about 7–13 s each). If the cabinet never answers a borrow, the slot stays held (`availability = true`, `borrowed_user` set) until someone checks the cabinet and clears it, so an umbrella can't leave without a loan.
+
 ---
 
 ## 🗄️ Database
@@ -84,7 +86,7 @@ Without an email provider, local development prints verification codes to the se
 ### Hardware tools
 * `npm run simulator` — interactive cabinet simulator (`firmware/mock_esp32.js`)
 * `npx tsx worker/mqtt-listener.ts` — read-only monitor that prints every cabinet command and response
-* `firmware/esp32_smart_umbrella.ino` — the cabinet firmware (fill in WiFi, and broker login if using a private broker)
+* `firmware/esp32_smart_umbrella.ino` — the cabinet firmware, all 4 slots in parallel (fill in WiFi, and broker login if using a private broker). The older one-slot-at-a-time version is tagged `v1.0-serial-cabinet` on the Darkempire2017 fork.
 
 ---
 

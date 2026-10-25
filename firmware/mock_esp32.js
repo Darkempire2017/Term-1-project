@@ -47,17 +47,14 @@ const client = mqtt.connect(BROKER_URL, {
   clientId: CLIENT_ID,
   clean: true,
   connectTimeout: 5000,
+  username: process.env.HIVEMQ_USERNAME || undefined,
+  password: process.env.HIVEMQ_PASSWORD || undefined,
 });
 
 client.on('connect', () => {
   console.log(`✅ [ESP32 Cabinet] Connected to HiveMQ Broker! (Client ID: ${CLIENT_ID})`);
 
-  const commandTopics = [
-    TOPIC_COMMAND,
-    'astrix/uom/kiosk-01/command/borrow',
-    'astrix/uom/kiosk-01/command/return',
-    'astrix/uom/kiosk-01/command/unlock',
-  ];
+  const commandTopics = [TOPIC_COMMAND];
 
   client.subscribe(commandTopics, (err) => {
     if (err) {

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { cabinetErrorMessage, runCabinetCommand } from '@/lib/mqtt';
+import { cabinetErrorMessage, runCabinetCommand, cabinetErrorStatus, getCachedCabinetOnline } from '@/lib/mqtt';
 import { sendReturnReceiptEmail } from '@/lib/email';
 import { getSessionIndex } from '@/lib/session';
 import { isDevIndex } from '@/lib/dev';
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
       if (!result.ok) {
         return NextResponse.json(
           { success: false, message: cabinetErrorMessage(result.error, 'RETURN'), slot },
-          { status: result.error === 'TIMEOUT' ? 504 : 502 }
+          { status: cabinetErrorStatus(result.error) }
         );
       }
       return NextResponse.json({
@@ -81,12 +81,20 @@ export async function POST(request: Request) {
       );
     }
 
+    // Known to be offline: say so straight away
+    if (getCachedCabinetOnline() === false) {
+      return NextResponse.json(
+        { success: false, message: cabinetErrorMessage('OFFLINE', 'RETURN'), slot: homeSlot.slot },
+        { status: 503 }
+      );
+    }
+
     const result = await runCabinetCommand('RETURN', homeSlot.slot);
 
     if (!result.ok) {
       return NextResponse.json(
         { success: false, message: cabinetErrorMessage(result.error, 'RETURN'), slot: homeSlot.slot },
-        { status: result.error === 'TIMEOUT' ? 504 : 502 }
+        { status: cabinetErrorStatus(result.error) }
       );
     }
 

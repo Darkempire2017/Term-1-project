@@ -81,6 +81,10 @@ export default function DashboardPage() {
   // Developer (hardware testing) access is decided by the server
   const [isDevAccount, setIsDevAccount] = useState(false);
 
+  // Cabinet online/offline from the server (null = not known yet)
+  const [cabinetOnline, setCabinetOnline] = useState<boolean | null>(null);
+  const cabinetOffline = cabinetOnline === false;
+
   // Slot states from the server (no placeholder tag IDs)
   const [slots, setSlots] = useState<PublicSlot[]>([]);
 
@@ -152,6 +156,7 @@ export default function DashboardPage() {
       setCurrentUserIndex(json.user.index_no);
       setCurrentUserName(json.user.username || 'Student');
       setIsDevAccount(json.is_dev);
+      setCabinetOnline(json.cabinet_online);
       setSlots(json.slots);
       setActiveLoan(json.active_loan);
     } catch (err: any) {
@@ -493,6 +498,14 @@ export default function DashboardPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
+
+        {/* Cabinet Offline Banner */}
+        {cabinetOffline && (
+          <div className="p-3.5 rounded-2xl text-xs bg-slate-800 text-white border border-slate-700 shadow-sm" role="status">
+            <p className="font-bold">The umbrella cabinet is offline</p>
+            <p className="text-slate-300 mt-0.5">Borrowing and returning are paused until it reconnects. This page updates by itself.</p>
+          </div>
+        )}
 
         {/* Notifications & Hardware Feedback */}
         {notification && (
@@ -849,11 +862,11 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={() => handleBorrow()}
-              disabled={Boolean(activeLoan) || !nextAvailableSlot || actionInProgress !== null || unlockCountdown !== null}
+              disabled={Boolean(activeLoan) || !nextAvailableSlot || actionInProgress !== null || unlockCountdown !== null || cabinetOffline}
               className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
                 unlockCountdown !== null
                   ? 'bg-amber-500 text-white shadow-amber-500/30 animate-pulse cursor-wait'
-                  : !activeLoan && nextAvailableSlot
+                  : !activeLoan && nextAvailableSlot && !cabinetOffline
                   ? 'bg-sky-600 hover:bg-sky-700 text-white shadow-sky-600/30 active:scale-[0.99] cursor-pointer'
                   : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
               }`}
@@ -882,9 +895,9 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={handleReturn}
-              disabled={!activeLoan || actionInProgress !== null}
+              disabled={!activeLoan || actionInProgress !== null || cabinetOffline}
               className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
-                activeLoan
+                activeLoan && !cabinetOffline
                   ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30 active:scale-[0.99] cursor-pointer'
                   : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
               }`}

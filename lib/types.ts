@@ -50,6 +50,7 @@ export interface MeResponse {
   success: true;
   user: { index_no: string; username: string; email: string };
   is_dev: boolean;
+  cabinet_online: boolean | null; // null = not known yet
   slots: PublicSlot[];
   active_loan: {
     record_id: string;

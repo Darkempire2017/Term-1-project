@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { runCabinetCommand, cabinetErrorMessage } from '@/lib/mqtt';
+import { runCabinetCommand, cabinetErrorMessage, cabinetErrorStatus } from '@/lib/mqtt';
 import { getSessionIndex } from '@/lib/session';
 import { isDevIndex } from '@/lib/dev';
 
@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     if (!result.ok) {
       return NextResponse.json(
         { success: false, message: cabinetErrorMessage(result.error, action), slot, action },
-        { status: result.error === 'TIMEOUT' ? 504 : 502 }
+        { status: cabinetErrorStatus(result.error) }
       );
     }
 

@@ -41,6 +41,7 @@
   - [x] Real-time slot status from Supabase `umbrellas` table
   - [x] **State A ("When borrowing" - no active loan):** Shows `Available slot: [ X ]`, active `Borrow` button, disabled `Return` button
   - [x] **State B ("When returning" - active loan):** Shows borrowed `Umbrella ID`, elapsed time (`Since when`), disabled `Borrow` button, active `Return` button
+  - [x] Dynamic Full-Screen Ambient Glow: Green on Borrow in progress, Blue on Return in progress, Red on Error states
   - [x] Bottom Navigation integration
 - [x] **Step 7: Full API Routes, MQTT Worker, Simulator & Emails**
   - [x] `/api/auth/*` (Sign up, OTP verification, Login)

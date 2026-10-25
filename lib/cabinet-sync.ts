@@ -4,6 +4,7 @@ import { getBrokerOptions, getEffectiveBrokerUrl, MQTT_TOPIC_SLOTS, MQTT_TOPIC_S
 import { sendReturnReceiptEmail } from './email';
 import { formatLoanDuration } from './loans';
 import { OPEN_LOAN_STATUSES } from './types';
+import { logActivity, raiseAlert } from './events';
 
 // =====================================================================
 // Keeps the database in step with what is physically in the cabinet.
@@ -17,11 +18,13 @@ import { OPEN_LOAN_STATUSES } from './types';
 // broker before relying on this with real students.
 // =====================================================================
 
-interface CabinetSlotState {
+export interface CabinetSlotState {
   slot: number;
   busy: boolean;
   docked: boolean;
   umbrella: number | null;
+  locked?: boolean;     // newer firmware: whether the lock is closed
+  unlocked_s?: number;  // newer firmware: seconds the slot has been unlocked while idle
 }
 
 const SYNC_EVERY_MS = 15000;      // at most one sync per server instance every 15 s
@@ -31,6 +34,13 @@ const STALE_HOLD_MS = 60000;      // a real borrow finishes in under 50 s; a hol
 let lastSyncAt = 0;
 let running: Promise<void> | null = null;
 
+// The most recent cabinet slot report this instance read (used by the admin panel)
+let lastSnapshot: { slots: CabinetSlotState[]; at: number } | null = null;
+
+export function getLastCabinetSnapshot() {
+  return lastSnapshot;
+}
+
 // When each held slot was first seen in its current state ("home" or "gone"),
 // keyed by "slot:student:state". Kept in memory per server instance: if the
 // instance restarts, the 60 s wait simply starts again.
@@ -39,9 +49,9 @@ const holdSeenSince = new Map<string, number>();
 /**
  * Runs a sync unless one ran recently. Safe to call often (e.g. from /api/me).
  */
-export function syncCabinetSlots(): Promise<void> {
+export function syncCabinetSlots(everyMs = SYNC_EVERY_MS): Promise<void> {
   if (running) return running;
-  if (Date.now() - lastSyncAt < SYNC_EVERY_MS) return Promise.resolve();
+  if (Date.now() - lastSyncAt < everyMs) return Promise.resolve();
   lastSyncAt = Date.now();
   running = doSync()
     .catch((err) => console.warn('⚠️ [Cabinet Sync] Failed:', err?.message || err))
@@ -102,6 +112,7 @@ function readSlotState(timeoutMs = 3000): Promise<CabinetSlotState[] | null> {
 async function doSync() {
   const state = await readSlotState();
   if (!state) return;
+  lastSnapshot = { slots: state, at: Date.now() };
 
   const { data: rows, error } = await supabaseAdmin
     .from('umbrellas')
@@ -189,6 +200,9 @@ async function releaseStaleHold(slot: number, student: string) {
 
   if (data && data.length > 0) {
     console.log(`🔄 [Cabinet Sync] Slot ${slot} was held for ${student}, but Umbrella ${slot} is still in it: released the hold.`);
+    await raiseAlert('STALE_HOLD_RELEASED', 'info', `Slot ${slot} was held for ${student} after a borrow that never reached the cabinet. The umbrella is still there, so the hold was released.`, {
+      slot, index_no: student, actor: 'system',
+    });
   }
 }
 
@@ -214,8 +228,14 @@ async function recordLostBorrow(slot: number, umbrellaId: string, student: strin
 
   if (error) {
     console.warn(`⚠️ [Cabinet Sync] Slot ${slot} is empty after a held borrow, but the loan for ${student} could not be recorded:`, error.message);
+    await raiseAlert('LOST_BORROW_NOT_RECORDED', 'critical', `Slot ${slot} is empty after a borrow by ${student} whose answer was lost, but the loan could not be recorded. Check who has Umbrella ${slot}.`, {
+      slot, index_no: student, actor: 'system', details: { error: error.message },
+    });
   } else {
     console.log(`🔄 [Cabinet Sync] Slot ${slot} was held for ${student} and is now empty: recorded the loan of Umbrella ${slot}.`);
+    await raiseAlert('LOST_BORROW_RECORDED', 'warning', `The cabinet's answer for ${student}'s borrow from Slot ${slot} was lost, but the slot is empty, so the loan of Umbrella ${slot} was recorded for them.`, {
+      slot, index_no: student, actor: 'system',
+    });
   }
 }
 
@@ -253,6 +273,12 @@ async function markReturnedAtCabinet(slot: number, umbrellaId: string) {
       return;
     }
     console.log(`🔄 [Cabinet Sync] Umbrella ${slot} is back in Slot ${slot}: closed loan for ${loan.index_no}.`);
+    await raiseAlert('RETURNED_AT_CABINET', 'info', `Umbrella ${slot} was put back in Slot ${slot} outside the website, so ${loan.index_no}'s loan was closed automatically.`, {
+      slot, index_no: loan.index_no, actor: 'cabinet', details: { record_id: loan.record_id },
+    });
+    await logActivity('RETURN', `${loan.index_no} returned Umbrella ${slot} at the cabinet (closed by sync)`, {
+      slot, index_no: loan.index_no, actor: 'cabinet',
+    });
 
     try {
       const { data: user } = await supabaseAdmin
@@ -290,5 +316,8 @@ async function markMissing(slot: number) {
 
   if (data && data.length > 0) {
     console.warn(`🔄 [Cabinet Sync] Slot ${slot} is empty at the cabinet: marked as out (no loan recorded).`);
+    await raiseAlert('UMBRELLA_MISSING', 'critical', `Umbrella ${slot} is missing from Slot ${slot} with no loan recorded. It may have been taken by hand.`, {
+      slot, actor: 'cabinet', dedupeKey: `slot:${slot}`,
+    });
   }
 }

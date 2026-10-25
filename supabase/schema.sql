@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.users (
     verification_code VARCHAR(10),                  -- password-reset code, cleared after use
     verification_expires TIMESTAMPTZ,
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    is_locked BOOLEAN NOT NULL DEFAULT FALSE,       -- set by an admin
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -46,6 +47,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_open_loan_per_student
 
 CREATE INDEX IF NOT EXISTS idx_borrow_records_status ON public.borrow_records(status);
 
+-- 4. ADMIN EVENTS (activity log + admin alerts, see docs/ADMIN_PANEL.md)
+CREATE TABLE IF NOT EXISTS public.admin_events (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    kind TEXT NOT NULL CHECK (kind IN ('ALERT', 'ACTIVITY')),
+    severity TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info', 'warning', 'critical')),
+    type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    slot INT,
+    index_no TEXT,
+    actor TEXT,
+    dedupe_key TEXT,
+    details JSONB,
+    handled_at TIMESTAMPTZ,
+    handled_by TEXT
+);
+CREATE INDEX IF NOT EXISTS admin_events_recent ON public.admin_events (kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS admin_events_open_alerts ON public.admin_events (type, dedupe_key)
+    WHERE kind = 'ALERT' AND handled_at IS NULL;
+
 -- ================================================================
 -- ACCESS: only the server (service-role key) may read or write.
 -- Row level security is ON with NO policies, so the public anon key
@@ -55,8 +76,9 @@ CREATE INDEX IF NOT EXISTS idx_borrow_records_status ON public.borrow_records(st
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.umbrellas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.borrow_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.admin_events ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON public.users, public.umbrellas, public.borrow_records FROM anon, authenticated;
+REVOKE ALL ON public.users, public.umbrellas, public.borrow_records, public.admin_events FROM anon, authenticated;
 
 -- ================================================================
 -- SEED: the 4 cabinet slots with the real umbrella tag UIDs

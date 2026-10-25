@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { runCabinetCommand, cabinetErrorMessage, cabinetErrorStatus } from '@/lib/mqtt';
 import { getSessionIndex } from '@/lib/session';
 import { isDevIndex } from '@/lib/dev';
+import { logActivity } from '@/lib/events';
 
 export const maxDuration = 30;
 
@@ -29,6 +30,9 @@ export async function POST(request: Request) {
     }
 
     const result = await runCabinetCommand(action, slot, 12000);
+    await logActivity(action === 'OPEN' ? 'DEV_LOCK_OPEN' : 'DEV_LOCK_CLOSE', `Developer ${indexNo} sent ${action} to Slot ${slot}: ${result.ok ? result.response.status : result.error}`, {
+      slot, index_no: indexNo, actor: indexNo,
+    });
     if (!result.ok) {
       return NextResponse.json(
         { success: false, message: cabinetErrorMessage(result.error, action), slot, action },

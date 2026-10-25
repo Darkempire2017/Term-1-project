@@ -72,6 +72,9 @@ For the existing live database, run [`supabase/migrations/20261025_lockdown.sql`
 
 ---
 
+## 🛡️ Admin panel
+`/admin`, for accounts in `ADMIN_INDEXES` (default `250529E`). Live overview, alerts, slots, loans, users and an activity log. See [`docs/ADMIN_PANEL.md`](docs/ADMIN_PANEL.md). Needs [`supabase/migrations/20261026_admin_panel.sql`](supabase/migrations/20261026_admin_panel.sql) run once.
+
 ## 💻 Running locally
 
 ```bash
@@ -86,6 +89,7 @@ npm run typecheck
 | `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Database (server only) |
 | `AUTH_SECRET` | Signs session cookies and signup tokens (≥ 32 random characters) |
 | `DEV_INDEXES` | Index numbers that get the hardware testing console, e.g. `DEV001` |
+| `ADMIN_INDEXES` | Index numbers with the admin panel (default `250529E`) |
 | `HIVEMQ_BROKER_URL`, `HIVEMQ_USERNAME`, `HIVEMQ_PASSWORD` | MQTT broker (optional; public broker if empty) |
 | `GMAIL_USER`, `GMAIL_APP_PASSWORD` or `RESEND_API_KEY` | Email delivery |
 

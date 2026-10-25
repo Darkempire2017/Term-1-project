@@ -60,6 +60,10 @@ For the existing live database, run [`supabase/migrations/20261025_lockdown.sql`
 | Return fail | `{"action":"RETURN","slot":X,"status":"FAIL","reason":"NO_UMBRELLA","message":"No umbrella returned to Slot X after 5 checks. Closing the lock."}` |
 | Wrong umbrella | `{"action":"RETURN","slot":X,"status":"FAIL","reason":"WRONG_UMBRELLA","message":"Wrong umbrella in Slot X. Leaving the slot UNLOCKED - take it out and return Umbrella X."}` |
 
+* **Slot state** (cabinet ➔ server): `astrix-umbrella/cabinet/slots`, **retained**. Sent whenever what is in a slot changes, and at least once a minute:
+  `{"slots":[{"slot":1,"busy":false,"docked":true,"umbrella":1}, ...]}` (`umbrella` = number read on that slot's reader, `0` = unknown tag, `null` = no tag).
+  `lib/cabinet-sync.ts` reads it (after `/api/me`, at most every 15 s) and fixes the database: if a slot's own umbrella is back while the database says it is out, the open loan is closed (e.g. a return done at the cabinet with `r1`). If a free slot is empty at the cabinet, the slot is marked out. Slots that are busy, have a borrow in progress, or a loan younger than 60 s are left alone.
+
 > ⚠️ On the public broker anyone can publish to these topics. Before real use, move to a private broker (e.g. HiveMQ Cloud free tier) and allow only the cabinet to publish responses and only the server to publish commands. Set `HIVEMQ_*` in Vercel and `MQTT_USER`/`MQTT_PASS` in the firmware.
 
 ---

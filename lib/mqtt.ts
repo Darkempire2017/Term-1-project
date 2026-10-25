@@ -9,6 +9,9 @@ export const MQTT_TOPIC_COMMAND = 'astrix-umbrella/cabinet/command';
 // 2. ESP32 ➔ Server Response Topic
 export const MQTT_TOPIC_RESPONSE = 'astrix-umbrella/cabinet/response';
 
+// 3. ESP32 ➔ Server: what is physically in each slot (retained, see lib/cabinet-sync.ts)
+export const MQTT_TOPIC_SLOTS = 'astrix-umbrella/cabinet/slots';
+
 export type CabinetAction = 'BORROW' | 'RETURN' | 'OPEN' | 'CLOSE';
 
 export interface CabinetCommand {

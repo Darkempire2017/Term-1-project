@@ -5,7 +5,7 @@ import { publishBorrowCommand } from '@/lib/mqtt';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { index_no } = body;
+    const { index_no, slot: requestedSlot } = body;
 
     const cleanIndex = index_no?.trim().toUpperCase();
     if (!cleanIndex) {
@@ -15,45 +15,77 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Check for active borrow record in Supabase
-    const { data: activeLoan } = await supabaseAdmin
-      .from('borrow_records')
-      .select('*')
-      .eq('index_no', cleanIndex)
-      .eq('status', 'ACTIVE')
-      .maybeSingle();
+    const isDevAccount = cleanIndex === 'DEV001';
 
-    if (activeLoan) {
+    // 1. Check for active borrow record in Supabase (DEV001 can bypass the 1-umbrella limit)
+    if (!isDevAccount) {
+      const { data: activeLoan } = await supabaseAdmin
+        .from('borrow_records')
+        .select('*')
+        .eq('index_no', cleanIndex)
+        .eq('status', 'ACTIVE')
+        .maybeSingle();
+
+      if (activeLoan) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'You already have an active umbrella loan. Please return it before borrowing another.',
+            activeLoan,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    // 2. Determine target umbrella slot
+    let targetSlotData: { slot: number; umbrella_id: string } | null = null;
+
+    if (isDevAccount && typeof requestedSlot === 'number' && requestedSlot >= 1 && requestedSlot <= 4) {
+      // DEV001 direct slot unlock
+      const { data: explicitSlot, error: explicitErr } = await supabaseAdmin
+        .from('umbrellas')
+        .select('*')
+        .eq('slot', requestedSlot)
+        .maybeSingle();
+
+      if (explicitErr || !explicitSlot) {
+        return NextResponse.json(
+          { success: false, message: `Slot #${requestedSlot} not found in database.` },
+          { status: 404 }
+        );
+      }
+      targetSlotData = explicitSlot;
+    } else {
+      // Standard flow: Find next available umbrella slot in Supabase
+      const { data: availableSlot, error: slotError } = await supabaseAdmin
+        .from('umbrellas')
+        .select('*')
+        .eq('availability', true)
+        .order('slot', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (slotError || !availableSlot) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'All umbrellas are currently in use. Please check back soon.',
+          },
+          { status: 400 }
+        );
+      }
+      targetSlotData = availableSlot;
+    }
+
+    if (!targetSlotData) {
       return NextResponse.json(
-        {
-          success: false,
-          message: 'You already have an active umbrella loan. Please return it before borrowing another.',
-          activeLoan,
-        },
+        { success: false, message: 'No umbrella slot found to unlock.' },
         { status: 400 }
       );
     }
 
-    // 2. Find next available umbrella slot in Supabase
-    const { data: availableSlot, error: slotError } = await supabaseAdmin
-      .from('umbrellas')
-      .select('*')
-      .eq('availability', true)
-      .order('slot', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    if (slotError || !availableSlot) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: 'All umbrellas are currently in use. Please check back soon.',
-        },
-        { status: 400 }
-      );
-    }
-
-    const { slot, umbrella_id } = availableSlot;
+    const { slot, umbrella_id } = targetSlotData;
 
     // 3. Mark the slot with the pending student index so worker knows who initiated the borrow
     await supabaseAdmin

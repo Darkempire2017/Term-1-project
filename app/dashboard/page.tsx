@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import mqtt from 'mqtt';
 import {
   Umbrella,
   Lock,
@@ -16,6 +17,7 @@ import {
   Check,
   ChevronRight,
   Info,
+  Wrench,
 } from 'lucide-react';
 import { BottomNav } from '@/components/BottomNav';
 import { supabase } from '@/lib/supabase';
@@ -27,6 +29,9 @@ export default function DashboardPage() {
   const { isStudentMode } = useViewMode();
   const [currentUserIndex, setCurrentUserIndex] = useState('');
   const [currentUserName, setCurrentUserName] = useState('');
+
+  // Identify developer account
+  const isDevAccount = currentUserIndex === 'DEV001';
 
   // Supabase slot states
   const [slots, setSlots] = useState<UmbrellaSlotType[]>([
@@ -136,6 +141,99 @@ export default function DashboardPage() {
     }
   }, [currentUserIndex]);
 
+  // Live Browser MQTT WebSocket Connection for real-time cabinet event detection
+  useEffect(() => {
+    if (!currentUserIndex) return;
+
+    let client: mqtt.MqttClient | null = null;
+    try {
+      client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+        clientId: `astrix-web-ui-${Math.random().toString(16).substring(2, 8)}`,
+        clean: true,
+        connectTimeout: 8000,
+      });
+
+      client.on('connect', () => {
+        client?.subscribe('astrix-umbrella/cabinet/response');
+        console.log('📡 [Browser MQTT] Subscribed to cabinet responses.');
+      });
+
+      client.on('message', async (_topic, message) => {
+        try {
+          const data = JSON.parse(message.toString());
+          console.log('📡 [Cabinet Response Received]:', data);
+
+          const { action, slot, status, reason, message: msg } = data;
+
+          if (action === 'RETURN') {
+            if (status === 'SUCCESS') {
+              setNotification({
+                type: 'success',
+                text: `↩️ ${msg || `Umbrella returned to Slot #${slot}! Lock engaged and return confirmed.`}`,
+              });
+              setActionInProgress(null);
+              // Complete return in database & dispatch receipt email
+              await fetch('/api/return/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ slot, index_no: currentUserIndex }),
+              });
+              refreshStationData();
+            } else if (status === 'FAIL') {
+              setActionInProgress(null);
+              if (reason === 'WRONG_UMBRELLA') {
+                setNotification({
+                  type: 'error',
+                  text: `❌ Wrong umbrella in Slot #${slot}! Slot is left unlocked — please remove it and return the correct umbrella.`,
+                });
+              } else {
+                setNotification({
+                  type: 'error',
+                  text: `⚠️ ${msg || `No umbrella detected in Slot #${slot} after 5 checks. Lock closed.`}`,
+                });
+              }
+              refreshStationData();
+            }
+          } else if (action === 'BORROW') {
+            if (status === 'SUCCESS') {
+              setNotification({
+                type: 'success',
+                text: `✅ ${msg || `Umbrella taken from Slot #${slot}! Lock closed. Active loan started.`}`,
+              });
+              setUnlockCountdown(null);
+              setActionInProgress(null);
+              // Complete borrow in database & dispatch receipt email
+              await fetch('/api/borrow/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ slot, index_no: currentUserIndex }),
+              });
+              refreshStationData();
+            } else if (status === 'FAIL') {
+              setNotification({
+                type: 'error',
+                text: `⚠️ ${msg || `Umbrella was NOT taken from Slot #${slot}. Lock closed.`}`,
+              });
+              setUnlockCountdown(null);
+              setActionInProgress(null);
+              refreshStationData();
+            }
+          }
+        } catch (e) {
+          console.warn('MQTT parse error:', e);
+        }
+      });
+    } catch (err) {
+      console.warn('Browser MQTT connection warning:', err);
+    }
+
+    return () => {
+      try {
+        client?.end(true);
+      } catch {}
+    };
+  }, [currentUserIndex]);
+
   // Next available slot calculation (lowest slot where availability = true)
   const availableSlotsList = slots.filter((s) => s.availability);
   const nextAvailableSlot = availableSlotsList.length > 0 ? availableSlotsList[0] : null;
@@ -152,14 +250,20 @@ export default function DashboardPage() {
     return `${hours}h ${remMins}m ago`;
   };
 
-  // State A action: Borrow Umbrella
-  const handleBorrow = async () => {
-    if (!nextAvailableSlot) {
-      setNotification({ type: 'error', text: 'No umbrellas currently available at this station.' });
-      return;
+  // Borrow Umbrella (Supports direct slot selection for DEV001)
+  const handleBorrow = async (requestedSlot?: number) => {
+    let targetSlot: number;
+
+    if (isDevAccount && typeof requestedSlot === 'number') {
+      targetSlot = requestedSlot;
+    } else {
+      if (!nextAvailableSlot) {
+        setNotification({ type: 'error', text: 'No umbrellas currently available at this station.' });
+        return;
+      }
+      targetSlot = nextAvailableSlot.slot;
     }
 
-    const targetSlot = nextAvailableSlot.slot;
     setActionInProgress('borrow');
     setNotification(null);
 
@@ -168,7 +272,7 @@ export default function DashboardPage() {
       const res = await fetch('/api/borrow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ index_no: currentUserIndex }),
+        body: JSON.stringify({ index_no: currentUserIndex, slot: targetSlot }),
       });
 
       const json = await res.json();
@@ -179,13 +283,13 @@ export default function DashboardPage() {
         return;
       }
 
-      // 2. Start active 10-second physical unlock countdown
+      // 2. Start active countdown waiting for physical removal
       setNotification({
         type: 'info',
-        text: `🔓 Slot #${targetSlot} unlocked! Please pull the umbrella off the rack within 10 seconds.`,
+        text: `🔓 Slot #${targetSlot} unlocked! Please pull the umbrella off the rack (waiting for cabinet confirmation)...`,
       });
 
-      let remaining = 10;
+      let remaining = 15;
       setUnlockCountdown(remaining);
 
       const countdownTimer = setInterval(async () => {
@@ -196,36 +300,7 @@ export default function DashboardPage() {
           clearInterval(countdownTimer);
           setUnlockCountdown(null);
           setActionInProgress(null);
-
-          // 3. Check Supabase if umbrella was actually removed by hardware
-          const { data: activeBorrow } = await supabase
-            .from('borrow_records')
-            .select('*')
-            .eq('index_no', currentUserIndex)
-            .eq('status', 'ACTIVE')
-            .maybeSingle();
-
-          if (activeBorrow) {
-            // Umbrella was physically pulled off rack
-            setActiveLoan({
-              record_id: activeBorrow.record_id,
-              umbrella_id: activeBorrow.umbrella_id,
-              slot: targetSlot,
-              borrowed_time: activeBorrow.borrowed_time,
-            });
-            setNotification({
-              type: 'success',
-              text: `✅ Umbrella removed! Active loan started for ${activeBorrow.umbrella_id}.`,
-            });
-            refreshStationData();
-          } else {
-            // Station isn't live yet or umbrella was not pulled off rack
-            setNotification({
-              type: 'info',
-              text: `🔒 10s window expired. Solenoid re-locked on Slot #${targetSlot}. Umbrella was not removed.`,
-            });
-            refreshStationData();
-          }
+          refreshStationData();
         }
       }, 1000);
     } catch (err: any) {
@@ -239,12 +314,15 @@ export default function DashboardPage() {
     }
   };
 
-  // State B action: Return Umbrella
+  // Return Umbrella (Only confirms once hardware verifies RFID and lock engages)
   const handleReturn = async () => {
     if (!activeLoan) return;
 
     setActionInProgress('return');
-    setNotification(null);
+    setNotification({
+      type: 'info',
+      text: `🔓 Unlocking Slot #${activeLoan.slot} for return... Please wait.`,
+    });
 
     try {
       const res = await fetch('/api/return', {
@@ -256,35 +334,30 @@ export default function DashboardPage() {
       const json = await res.json();
 
       if (!res.ok || !json.success) {
-        setNotification({ type: 'error', text: json.message || 'Failed to return umbrella.' });
+        setNotification({ type: 'error', text: json.message || 'Failed to unlock slot for return.' });
+        setActionInProgress(null);
         return;
       }
 
       const returnedSlot = json.slot || activeLoan.slot;
 
-      setActiveLoan(null);
-
-      setSlots((prev) =>
-        prev.map((s) =>
-          s.slot === returnedSlot
-            ? { ...s, availability: true, borrowed_user: null }
-            : s
-        )
-      );
-
+      // DO NOT mark return confirmed here! Wait for hardware response.
       setNotification({
-        type: 'success',
-        text: `↩️ Umbrella returned to Slot #${returnedSlot}! Lock engaged and return confirmed.`,
+        type: 'info',
+        text: `🔓 Slot #${returnedSlot} unlocked! Please insert your umbrella into Slot #${returnedSlot}. Waiting for lock verification...`,
       });
+
+      // Safety timeout after 25s if hardware takes long
+      setTimeout(() => {
+        refreshStationData();
+      }, 25000);
     } catch (err: any) {
-      console.warn('Return API fallback:', err);
-      setActiveLoan(null);
-      setNotification({
-        type: 'success',
-        text: `↩️ Umbrella successfully returned to Slot #${activeLoan.slot}!`,
-      });
-    } finally {
+      console.warn('Return API error:', err);
       setActionInProgress(null);
+      setNotification({
+        type: 'error',
+        text: 'Could not connect to station to initiate return.',
+      });
     }
   };
 
@@ -362,6 +435,22 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* DEV001 Super-User Mode Banner */}
+        {isDevAccount && (
+          <div className="bg-purple-900/10 border border-purple-500/30 rounded-2xl p-3 flex items-center justify-between text-xs text-purple-900 shadow-sm">
+            <div className="flex items-center space-x-2">
+              <span className="text-base">🛠️</span>
+              <div>
+                <p className="font-bold">DEV001 Developer Account Active</p>
+                <p className="text-[10px] text-purple-700 font-medium">Multi-borrow allowed & click any slot below to eject/borrow directly</p>
+              </div>
+            </div>
+            <span className="text-[10px] bg-purple-600 text-white px-2 py-0.5 rounded-full font-mono uppercase font-bold">
+              DEV MODE
+            </span>
+          </div>
+        )}
+
         {/* ============================================================================== */}
         {/* DYNAMIC 2-STATE DISPLAY AREA */}
         {/* ============================================================================== */}
@@ -403,7 +492,7 @@ export default function DashboardPage() {
             {/* 4-Slot Visual Matrix */}
             <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-sm space-y-2.5">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                Physical Slots (1 - 4)
+                Physical Slots (1 - 4) {isDevAccount && '• Click Any Slot to Eject'}
               </span>
 
               <div className="grid grid-cols-4 gap-2">
@@ -437,6 +526,18 @@ export default function DashboardPage() {
                       >
                         {s.availability ? 'Ready' : 'Out'}
                       </span>
+
+                      {/* DEV001 Direct Eject / Unlock button */}
+                      {isDevAccount && (
+                        <button
+                          type="button"
+                          onClick={() => handleBorrow(s.slot)}
+                          disabled={actionInProgress !== null || unlockCountdown !== null}
+                          className="w-full mt-1 py-1 px-0.5 text-[8.5px] font-bold rounded-lg bg-purple-600 hover:bg-purple-700 text-white transition shadow-xs active:scale-95 cursor-pointer disabled:opacity-50"
+                        >
+                          {s.availability ? `Unlock #${s.slot}` : `Eject #${s.slot}`}
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -481,16 +582,32 @@ export default function DashboardPage() {
               </p>
             </div>
 
-            {/* Return Instructions Card */}
-            <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-sm space-y-2">
-              <div className="flex items-center space-x-2 text-xs font-bold text-slate-700">
-                <Info className="w-4 h-4 text-sky-600 shrink-0" />
-                <span>Return Instructions</span>
+            {/* If DEV001 has active loan, still show slot matrix for multi-borrow */}
+            {isDevAccount && (
+              <div className="bg-white p-4 rounded-3xl border border-purple-200/80 shadow-sm space-y-2.5">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-purple-700 block">
+                  🛠️ DEV001 Direct Slot Eject / Borrow Controls
+                </span>
+                <div className="grid grid-cols-4 gap-2">
+                  {slots.map((s) => (
+                    <div
+                      key={s.slot}
+                      className="p-2 rounded-2xl text-center border border-purple-100 bg-purple-50/40 flex flex-col items-center justify-between space-y-1"
+                    >
+                      <span className="text-[10px] font-bold text-slate-600 font-mono">#{s.slot}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleBorrow(s.slot)}
+                        disabled={actionInProgress !== null || unlockCountdown !== null}
+                        className="w-full py-1 px-1 text-[8.5px] font-bold rounded-lg bg-purple-600 hover:bg-purple-700 text-white transition shadow-xs active:scale-95 cursor-pointer disabled:opacity-50"
+                      >
+                        {s.availability ? `Unlock #${s.slot}` : `Eject #${s.slot}`}
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                When you tap <span className="font-bold text-emerald-600">Return</span>, the lock opens. Insert the umbrella firmly until you hear the mechanical latch engage.
-              </p>
-            </div>
+            )}
           </div>
         )}
 
@@ -501,12 +618,12 @@ export default function DashboardPage() {
           {/* 1. Borrow Button */}
           <button
             type="button"
-            onClick={handleBorrow}
-            disabled={Boolean(activeLoan) || !nextAvailableSlot || actionInProgress !== null || unlockCountdown !== null}
+            onClick={() => handleBorrow()}
+            disabled={(!isDevAccount && Boolean(activeLoan)) || !nextAvailableSlot || actionInProgress !== null || unlockCountdown !== null}
             className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
               unlockCountdown !== null
                 ? 'bg-amber-500 text-white shadow-amber-500/30 animate-pulse cursor-wait'
-                : !activeLoan && nextAvailableSlot
+                : (!activeLoan || isDevAccount) && nextAvailableSlot
                 ? 'bg-sky-600 hover:bg-sky-700 text-white shadow-sky-600/30 active:scale-[0.99] cursor-pointer'
                 : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
             }`}
@@ -518,6 +635,11 @@ export default function DashboardPage() {
               </>
             ) : actionInProgress === 'borrow' ? (
               <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : isDevAccount && activeLoan ? (
+              <>
+                <Unlock className="w-4 h-4" />
+                <span>Borrow Umbrella (DEV001 Multi-Borrow: Slot {nextAvailableSlot?.slot || 1})</span>
+              </>
             ) : !activeLoan ? (
               <>
                 <Unlock className="w-4 h-4" />

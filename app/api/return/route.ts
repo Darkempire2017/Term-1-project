@@ -45,70 +45,26 @@ export async function POST(request: Request) {
       targetSlot = userSlot?.slot || 1;
     }
 
-    const now = new Date();
-    const borrowDate = activeLoan.borrowed_time ? new Date(activeLoan.borrowed_time) : now;
-    const diffMs = Math.max(0, now.getTime() - borrowDate.getTime());
-    const diffMins = Math.floor(diffMs / 60000);
-    const durationStr =
-      diffMins < 60
-        ? `${diffMins} minutes`
-        : `${Math.floor(diffMins / 60)}h ${diffMins % 60}m`;
-
-    // 3. Mark umbrella slot as available and dock returned umbrella
-    await supabaseAdmin
-      .from('umbrellas')
-      .update({
-        availability: true,
-        borrowed_user: null,
-      })
-      .eq('slot', targetSlot);
-
-    // 4. Update borrow record status to RETURNED
-    await supabaseAdmin
-      .from('borrow_records')
-      .update({
-        status: 'RETURNED',
-        returned_time: now.toISOString(),
-      })
-      .eq('record_id', activeLoan.record_id);
-
-    // 5. Publish HiveMQ MQTT return command to cabinet (Topic: astrix-umbrella/cabinet/command)
+    // 3. Publish HiveMQ MQTT return command to cabinet (Topic: astrix-umbrella/cabinet/command)
     const mqttResult = await publishReturnCommand(targetSlot);
 
     if (!mqttResult.success) {
       console.warn('⚠️ [API/Return] MQTT command failed to reach broker:', mqttResult.error);
+      return NextResponse.json(
+        {
+          success: false,
+          message: `Cabinet communication error: ${mqttResult.error || 'Failed to reach MQTT broker'}. Please try again.`,
+          mqtt: mqttResult,
+        },
+        { status: 502 }
+      );
     }
-
-    // 6. Fetch user profile and send email receipt in background
-    (async () => {
-      try {
-        const { data: user } = await supabaseAdmin
-          .from('users')
-          .select('email, username')
-          .eq('index_no', cleanIndex)
-          .maybeSingle();
-
-        const studentEmail = user?.email || `${cleanIndex.toLowerCase()}@uom.lk`;
-        const studentName = user?.username || 'Student';
-
-        await sendReturnReceiptEmail(
-          studentEmail,
-          studentName,
-          targetSlot,
-          activeLoan.umbrella_id,
-          durationStr
-        );
-      } catch (err) {
-        console.warn('⚠️ [API/Return] Email background error:', err);
-      }
-    })();
 
     return NextResponse.json({
       success: true,
-      message: `Slot #${targetSlot} unlocked for return! Please insert your umbrella firmly.`,
+      message: `Slot #${targetSlot} unlocked for return. Please insert the umbrella into Slot #${targetSlot}.`,
       slot: targetSlot,
       umbrella_id: activeLoan.umbrella_id,
-      duration: durationStr,
       mqtt: mqttResult,
     });
   } catch (error: any) {

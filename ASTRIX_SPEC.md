@@ -104,3 +104,10 @@
   * **Case 3 (Return Success):** `{"action": "RETURN", "slot": 1, "status": "SUCCESS", "message": "Umbrella 1 returned to Slot 1. Closing the lock."}`
   * **Case 4 (Return Fail - No Umbrella):** `{"action": "RETURN", "slot": 1, "status": "FAIL", "reason": "NO_UMBRELLA", "message": "No umbrella returned to Slot 1 after 5 checks. Closing the lock."}`
   * **Case 5 (Return Fail - Wrong Umbrella):** `{"action": "RETURN", "slot": 1, "status": "FAIL", "reason": "WRONG_UMBRELLA", "message": "Wrong umbrella in Slot 1. Leaving the slot UNLOCKED - take it out and return Umbrella 1."}`
+
+---
+
+## 🛠️ Developer & Special Account Privileges (`DEV001`)
+* **Multi-Borrow Permission:** `DEV001` bypasses the 1-umbrella active loan limit; can hold multiple active loans simultaneously for hardware stress-testing.
+* **Direct Slot Selection:** `DEV001` can click any physical slot (1–4) in the dashboard slot grid to trigger borrow / solenoid eject for that specific slot. Normal student accounts are restricted to the auto-sequenced single slot.
+* **Hardware-Verified Confirmation:** Return operations do not prematurely commit to the database. Loan closure and return confirmation are only committed upon verified Case 3 response from the ESP32 cabinet.

@@ -64,6 +64,10 @@ For the existing live database, run [`supabase/migrations/20261025_lockdown.sql`
   `{"slots":[{"slot":1,"busy":false,"docked":true,"umbrella":1}, ...]}` (`umbrella` = number read on that slot's reader, `0` = unknown tag, `null` = no tag).
   `lib/cabinet-sync.ts` reads it (after `/api/me`, at most every 15 s) and fixes the database: if a slot's own umbrella is back while the database says it is out, the open loan is closed (e.g. a return done at the cabinet with `r1`). If a free slot is empty at the cabinet, the slot is marked out. Busy slots and loans younger than 60 s are left alone. A slot held by a borrow (`availability = true` with `borrowed_user` set) is only touched once it has looked the same for more than 60 s, longer than any real borrow: if its umbrella is still docked the hold is released (e.g. Borrow pressed while the cabinet was offline), and if the slot is empty the loan is recorded for the student who held it (the cabinet opened it but its answer was lost).
 
+* **"Got it"** (cabinet ➔ server): `astrix-umbrella/cabinet/ack`, sent the moment a command arrives: `{"action":"BORROW","slot":1,"accepted":true}` (`accepted:false` with `"reason":"BUSY"` if that slot is busy).
+* **Online/offline** (cabinet ➔ server): `astrix-umbrella/cabinet/status`, **retained**. `{"online":true,"ack":true}` when the cabinet connects (refreshed every minute); `{"online":false}` is its MQTT last will, published by the broker about 20 s after the cabinet drops off.
+  The server won't send a command while the status says offline, and if no "got it" arrives within 6 s it treats the cabinet as offline and frees the slot instead of holding it. The dashboard shows "The umbrella cabinet is offline" and pauses Borrow/Return. With older firmware (no status message) the server behaves as before.
+
 > ⚠️ On the public broker anyone can publish to these topics. Before real use, move to a private broker (e.g. HiveMQ Cloud free tier) and allow only the cabinet to publish responses and only the server to publish commands. Set `HIVEMQ_*` in Vercel and `MQTT_USER`/`MQTT_PASS` in the firmware.
 
 ---

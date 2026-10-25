@@ -12,6 +12,42 @@ export const MQTT_TOPIC_RESPONSE = 'astrix-umbrella/cabinet/response';
 // 3. ESP32 ➔ Server: what is physically in each slot (retained, see lib/cabinet-sync.ts)
 export const MQTT_TOPIC_SLOTS = 'astrix-umbrella/cabinet/slots';
 
+// 4. ESP32 ➔ Server: "got it" the moment a command arrives
+//    {"action":"BORROW","slot":1,"accepted":true} (accepted=false + reason "BUSY" if the slot is busy)
+export const MQTT_TOPIC_ACK = 'astrix-umbrella/cabinet/ack';
+
+// 5. ESP32 ➔ Server: online/offline (retained). {"online":true,"ack":true} when the cabinet
+//    connects; {"online":false} is its MQTT last will, published by the broker if it drops off.
+export const MQTT_TOPIC_STATUS = 'astrix-umbrella/cabinet/status';
+
+const STATUS_WAIT_MS = 1500; // how long to wait for the retained status before sending
+const ACK_WAIT_MS = 6000;    // no "got it" within this -> the cabinet is offline
+
+export interface CabinetStatus {
+  online: boolean;
+  ack: boolean; // firmware sends "got it" replies (older firmware doesn't)
+}
+
+// Last cabinet status seen by this server instance (from commands and the slot sync)
+let lastStatus: { status: CabinetStatus; seenAt: number } | null = null;
+
+export function rememberCabinetStatus(raw: string) {
+  try {
+    const data = JSON.parse(raw);
+    if (typeof data.online === 'boolean') {
+      lastStatus = { status: { online: data.online, ack: Boolean(data.ack) }, seenAt: Date.now() };
+    }
+  } catch {}
+}
+
+/**
+ * true/false if this instance saw the cabinet's status in the last 45 s, otherwise null (unknown)
+ */
+export function getCachedCabinetOnline(): boolean | null {
+  if (!lastStatus || Date.now() - lastStatus.seenAt > 45000) return null;
+  return lastStatus.status.online;
+}
+
 export type CabinetAction = 'BORROW' | 'RETURN' | 'OPEN' | 'CLOSE';
 
 export interface CabinetCommand {
@@ -27,9 +63,14 @@ export interface CabinetResponse {
   message: string;
 }
 
+// OFFLINE: the cabinet is offline or never said "got it" (it did not receive the command)
+// BUSY:    the cabinet said the slot is busy and did not start
+// TIMEOUT: the cabinet got the command but its result never arrived
+export type CabinetError = 'CONNECT_FAILED' | 'TIMEOUT' | 'OFFLINE' | 'BUSY';
+
 export type CabinetResult =
   | { ok: true; response: CabinetResponse }
-  | { ok: false; error: 'CONNECT_FAILED' | 'TIMEOUT'; commandSent: boolean };
+  | { ok: false; error: CabinetError; commandSent: boolean };
 
 /**
  * Resolves the optimal broker URL for web and serverless environments.
@@ -56,19 +97,29 @@ export function getBrokerOptions(clientPrefix: string): mqtt.IClientOptions {
 }
 
 /**
- * One connection attempt: subscribe to the response topic, send the command,
- * then wait for the cabinet's response for this action and slot.
+ * One connection attempt:
+ *   1. subscribe to the response, "got it" and status topics
+ *   2. wait briefly for the cabinet's retained status; if it says offline, stop here
+ *   3. send the command; if the firmware sends "got it" replies, expect one within 6 s
+ *   4. wait for the cabinet's response for this action and slot
+ * With older firmware (no status message) steps 2-3 are skipped, as before.
  */
 function attemptCabinetCommand(command: CabinetCommand, timeoutMs: number): Promise<CabinetResult> {
   return new Promise((resolve) => {
     const client = mqtt.connect(getEffectiveBrokerUrl(), getBrokerOptions('astrix-web'));
     let commandSent = false;
+    let decided = false; // whether step 2 has run
+    let status: CabinetStatus | null = null;
     let finished = false;
+    let statusTimer: ReturnType<typeof setTimeout> | null = null;
+    let ackTimer: ReturnType<typeof setTimeout> | null = null;
 
     const finish = (result: CabinetResult) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      if (statusTimer) clearTimeout(statusTimer);
+      if (ackTimer) clearTimeout(ackTimer);
       try {
         client.end(true);
       } catch {}
@@ -79,39 +130,86 @@ function attemptCabinetCommand(command: CabinetCommand, timeoutMs: number): Prom
       finish({ ok: false, error: commandSent ? 'TIMEOUT' : 'CONNECT_FAILED', commandSent });
     }, timeoutMs);
 
+    const sendCommand = () => {
+      if (decided || finished) return;
+      decided = true;
+      if (statusTimer) clearTimeout(statusTimer);
+
+      if (status && !status.online) {
+        console.warn('⚠️ [Cabinet] Status says offline. Not sending', JSON.stringify(command));
+        finish({ ok: false, error: 'OFFLINE', commandSent: false });
+        return;
+      }
+
+      console.log(`📡 [MQTT PUBLISH] ${MQTT_TOPIC_COMMAND}: ${JSON.stringify(command)}`);
+      client.publish(MQTT_TOPIC_COMMAND, JSON.stringify(command), { qos: 0 }, (pubErr) => {
+        if (pubErr) {
+          console.warn('⚠️ [HiveMQ] Publish error:', pubErr.message);
+          finish({ ok: false, error: 'CONNECT_FAILED', commandSent: false });
+          return;
+        }
+        commandSent = true;
+        if (status?.ack) {
+          ackTimer = setTimeout(() => {
+            console.warn('⚠️ [Cabinet] No "got it" reply. Treating the cabinet as offline.');
+            finish({ ok: false, error: 'OFFLINE', commandSent: true });
+          }, ACK_WAIT_MS);
+        }
+      });
+    };
+
     client.on('connect', () => {
-      // Subscribe BEFORE publishing so a fast cabinet response is never missed
-      client.subscribe(MQTT_TOPIC_RESPONSE, { qos: 0 }, (subErr) => {
+      // Subscribe BEFORE publishing so a fast cabinet reply is never missed
+      client.subscribe([MQTT_TOPIC_RESPONSE, MQTT_TOPIC_ACK, MQTT_TOPIC_STATUS], { qos: 0 }, (subErr) => {
         if (subErr) {
           console.warn('⚠️ [HiveMQ] Subscribe error:', subErr.message);
           finish({ ok: false, error: 'CONNECT_FAILED', commandSent: false });
           return;
         }
-
-        console.log(`📡 [MQTT PUBLISH] ${MQTT_TOPIC_COMMAND}: ${JSON.stringify(command)}`);
-        client.publish(MQTT_TOPIC_COMMAND, JSON.stringify(command), { qos: 0 }, (pubErr) => {
-          if (pubErr) {
-            console.warn('⚠️ [HiveMQ] Publish error:', pubErr.message);
-            finish({ ok: false, error: 'CONNECT_FAILED', commandSent: false });
-            return;
-          }
-          commandSent = true;
-        });
+        // The retained status (if any) normally arrives within a few hundred ms
+        statusTimer = setTimeout(sendCommand, STATUS_WAIT_MS);
       });
     });
 
-    client.on('message', (_topic, message, packet) => {
+    client.on('message', (topic, message, packet) => {
+      const raw = message.toString();
+
+      if (topic === MQTT_TOPIC_STATUS) {
+        rememberCabinetStatus(raw);
+        try {
+          const data = JSON.parse(raw);
+          if (typeof data.online === 'boolean') status = { online: data.online, ack: Boolean(data.ack) };
+        } catch {}
+        if (!decided) {
+          sendCommand();
+        } else if (status && !status.online && !finished) {
+          // The cabinet dropped off while we were waiting
+          finish({ ok: false, error: commandSent ? 'TIMEOUT' : 'OFFLINE', commandSent });
+        }
+        return;
+      }
+
       // A retained message was published earlier, not by the cabinet for this command.
-      // Accepting it would let an old or fake response complete a borrow/return.
+      // Accepting it would let an old or fake reply complete a borrow/return.
       if (packet.retain) return;
+
       try {
-        const data = JSON.parse(message.toString()) as CabinetResponse;
-        if (data.action === command.action && Number(data.slot) === command.slot) {
-          console.log(`📨 [Cabinet Response] ${message.toString()}`);
-          finish({ ok: true, response: data });
+        const data = JSON.parse(raw);
+        if (data.action !== command.action || Number(data.slot) !== command.slot) return;
+
+        if (topic === MQTT_TOPIC_ACK) {
+          if (ackTimer) clearTimeout(ackTimer);
+          ackTimer = null;
+          if (data.accepted === false) finish({ ok: false, error: 'BUSY', commandSent: true });
+          return;
+        }
+
+        if (topic === MQTT_TOPIC_RESPONSE) {
+          console.log(`📨 [Cabinet Response] ${raw}`);
+          finish({ ok: true, response: data as CabinetResponse });
         }
       } catch {
-        // Ignore anything that is not a cabinet JSON response
+        // Ignore anything that is not cabinet JSON
       }
     });
 
@@ -146,13 +244,26 @@ export async function runCabinetCommand(
 /**
  * Student-facing message when the cabinet could not be reached or did not answer
  */
-export function cabinetErrorMessage(error: 'CONNECT_FAILED' | 'TIMEOUT', action: CabinetAction): string {
+export function cabinetErrorMessage(error: CabinetError, action: CabinetAction): string {
   if (error === 'CONNECT_FAILED') {
     return 'Could not reach the umbrella cabinet. Please try again in a moment.';
+  }
+  if (error === 'OFFLINE') {
+    return 'The umbrella cabinet is offline right now. Please try again later.';
+  }
+  if (error === 'BUSY') {
+    return 'That slot is busy at the cabinet right now. Please try again in a moment.';
   }
   if (action === 'OPEN') return 'The cabinet did not confirm lock opening in time.';
   if (action === 'CLOSE') return 'The cabinet did not confirm lock closing in time.';
   return action === 'BORROW'
     ? 'The cabinet did not respond in time. If the slot opened and you took the umbrella, please contact the station team.'
     : 'The cabinet did not respond in time. If you put the umbrella back, please contact the station team.';
+}
+
+/**
+ * HTTP status for a cabinet error
+ */
+export function cabinetErrorStatus(error: CabinetError): number {
+  return { TIMEOUT: 504, OFFLINE: 503, BUSY: 409, CONNECT_FAILED: 502 }[error];
 }

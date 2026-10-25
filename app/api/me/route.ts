@@ -4,6 +4,7 @@ import { getSessionIndex, SESSION_COOKIE, sessionCookieOptions } from '@/lib/ses
 import { isDevIndex } from '@/lib/dev';
 import { findOpenLoan } from '@/lib/loans';
 import { syncCabinetSlots } from '@/lib/cabinet-sync';
+import { getCachedCabinetOnline } from '@/lib/mqtt';
 import type { MeResponse, PublicSlot } from '@/lib/types';
 
 /**
@@ -68,6 +69,7 @@ export async function GET() {
       success: true,
       user: { index_no: user.index_no, username: user.username, email: user.email },
       is_dev: isDev,
+      cabinet_online: getCachedCabinetOnline(),
       slots,
       active_loan: loan
         ? {

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { cabinetErrorMessage, runCabinetCommand } from '@/lib/mqtt';
+import { cabinetErrorMessage, runCabinetCommand, cabinetErrorStatus, getCachedCabinetOnline } from '@/lib/mqtt';
 import { sendBorrowReceiptEmail } from '@/lib/email';
 import { getSessionIndex } from '@/lib/session';
 import { isDevIndex } from '@/lib/dev';
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
       if (!result.ok) {
         return NextResponse.json(
           { success: false, message: cabinetErrorMessage(result.error, 'BORROW'), slot },
-          { status: result.error === 'TIMEOUT' ? 504 : 502 }
+          { status: cabinetErrorStatus(result.error) }
         );
       }
       return NextResponse.json({
@@ -62,6 +62,14 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { success: false, message: 'You already have an umbrella. Please return it before borrowing another.' },
         { status: 400 }
+      );
+    }
+
+    // Known to be offline: say so straight away, without reserving a slot
+    if (getCachedCabinetOnline() === false) {
+      return NextResponse.json(
+        { success: false, message: cabinetErrorMessage('OFFLINE', 'BORROW') },
+        { status: 503 }
       );
     }
 

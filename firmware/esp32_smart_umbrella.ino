@@ -19,6 +19,8 @@
  *   - Subscribe: astrix-umbrella/cabinet/command   {"action":"BORROW"|"RETURN","slot":1-4}
  *   - Publish:   astrix-umbrella/cabinet/response  (5 standard responses, QoS 0)
  *   - Publish:   astrix-umbrella/cabinet/slots     (retained: what is in each slot, so the website can sync)
+ *   - Publish:   astrix-umbrella/cabinet/ack       ("got it" the moment a command arrives)
+ *   - Publish:   astrix-umbrella/cabinet/status    (retained online/offline; offline is the MQTT last will)
  *
  * Libraries: PubSubClient (Nick O'Leary), ArduinoJson 7, MFRC522 (GithubCommunity)
  *
@@ -53,6 +55,10 @@ const char* MQTT_CLIENT_ID = "astrix-umbrella-esp32"; // must be unique on the b
 const char* COMMAND_TOPIC  = "astrix-umbrella/cabinet/command";  // HiveMQ -> ESP32
 const char* RESPONSE_TOPIC = "astrix-umbrella/cabinet/response"; // ESP32 -> HiveMQ
 const char* SLOTS_TOPIC    = "astrix-umbrella/cabinet/slots";    // ESP32 -> HiveMQ: what is in each slot (retained)
+const char* ACK_TOPIC      = "astrix-umbrella/cabinet/ack";      // ESP32 -> HiveMQ: "got it" for each command
+const char* STATUS_TOPIC   = "astrix-umbrella/cabinet/status";   // ESP32 -> HiveMQ: online/offline (retained)
+const char* STATUS_ONLINE  = "{\"online\":true,\"ack\":true}";
+const char* STATUS_OFFLINE = "{\"online\":false}";               // sent by the broker if the cabinet drops off
 
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
@@ -487,6 +493,7 @@ void watchIdleSlots() {
     }
   }
 
+  if (now - lastSlotsPublish >= slotsRefresh) publishStatus(); // keep "online" fresh too
   if (changed || now - lastSlotsPublish >= slotsRefresh) publishSlots();
 }
 
@@ -528,14 +535,17 @@ void connectWiFi() {
 
 void connectMqtt() {
   Serial.print("Connecting to MQTT broker... ");
-  bool connected = (strlen(MQTT_USER) > 0)
-                     ? mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS)
-                     : mqtt.connect(MQTT_CLIENT_ID);
+  // The "last will": if the cabinet drops off without saying goodbye, the broker
+  // publishes STATUS_OFFLINE for it, so the website knows not to send commands
+  const char* user = strlen(MQTT_USER) > 0 ? MQTT_USER : nullptr;
+  const char* pass = strlen(MQTT_USER) > 0 ? MQTT_PASS : nullptr;
+  bool connected = mqtt.connect(MQTT_CLIENT_ID, user, pass, STATUS_TOPIC, 0, true, STATUS_OFFLINE);
   if (connected) {
     Serial.println("connected.");
     mqtt.subscribe(COMMAND_TOPIC);
     Serial.printf("Subscribed to %s\n", COMMAND_TOPIC);
-    publishSlots(); // refresh the retained slot state after (re)connecting
+    publishStatus(); // tell the website the cabinet is online
+    publishSlots();  // refresh the retained slot state after (re)connecting
   } else {
     Serial.printf("failed (state %d). Retrying in 5 seconds.\n", mqtt.state());
   }
@@ -569,13 +579,40 @@ void publishResult(const char* action, int slotNumber, const Result &res) {
   }
 }
 
-// Check the action and slot, then start the job.
+// Retained "online" message (refreshed with the slot state, in case the broker drops it)
+void publishStatus() {
+  if (mqtt.connected()) mqtt.publish(STATUS_TOPIC, STATUS_ONLINE, true);
+}
+
+// "Got it" for a command, sent the moment it arrives. accepted=false means the slot is busy.
+void publishAck(const String &action, int slotNumber, bool accepted) {
+  if (!mqtt.connected()) return;
+  char payload[128];
+  snprintf(payload, sizeof(payload), "{\"action\":\"%s\",\"slot\":%d,\"accepted\":%s%s}",
+           action.c_str(), slotNumber, accepted ? "true" : "false", accepted ? "" : ",\"reason\":\"BUSY\"");
+  mqtt.publish(ACK_TOPIC, payload);
+}
+
+// Check the action and slot, confirm the command, then start the job.
 // Invalid commands are only logged here - the response topic only carries standard responses.
 void runAction(String action, int slotNumber) {
   action.toUpperCase();
 
   if (slotNumber < 1 || slotNumber > NUM_SLOTS) {
     Serial.println("Ignored: slot must be 1, 2, 3 or 4.");
+    return;
+  }
+
+  if (action != "BORROW" && action != "RETURN" && action != "OPEN" && action != "CLOSE") {
+    Serial.println("Ignored: action must be BORROW, RETURN, OPEN, or CLOSE.");
+    return;
+  }
+
+  // A borrow/return can't start on a slot that is already busy
+  bool busy = (action == "BORROW" || action == "RETURN") && jobs[slotNumber - 1].phase != SLOT_IDLE;
+  publishAck(action, slotNumber, !busy);
+  if (busy) {
+    Serial.printf("Ignored: Slot %d is already busy.\n", slotNumber);
     return;
   }
 
@@ -592,11 +629,6 @@ void runAction(String action, int slotNumber) {
     Serial.printf("=== Developer Command: Closed Lock on Slot %d ===\n", slotNumber);
     Result res = { true, "", "Lock closed." };
     publishResult("CLOSE", slotNumber, res);
-    return;
-  }
-
-  if (action != "BORROW" && action != "RETURN") {
-    Serial.println("Ignored: action must be BORROW, RETURN, OPEN, or CLOSE.");
     return;
   }
 
@@ -668,7 +700,7 @@ void setup() {
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setCallback(onMqttMessage);
   mqtt.setBufferSize(512);
-  mqtt.setKeepAlive(60);
+  mqtt.setKeepAlive(15); // loop() never waits, so a short keep-alive is safe; the broker notices a drop in ~20 s
   if (WiFi.status() == WL_CONNECTED) connectMqtt();
   lastMqttAttempt = millis();
 

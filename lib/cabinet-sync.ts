@@ -1,6 +1,6 @@
 import mqtt from 'mqtt';
 import { supabaseAdmin } from './supabase';
-import { getBrokerOptions, getEffectiveBrokerUrl, MQTT_TOPIC_SLOTS } from './mqtt';
+import { getBrokerOptions, getEffectiveBrokerUrl, MQTT_TOPIC_SLOTS, MQTT_TOPIC_STATUS, rememberCabinetStatus } from './mqtt';
 import { sendReturnReceiptEmail } from './email';
 import { formatLoanDuration } from './loans';
 import { OPEN_LOAN_STATUSES } from './types';
@@ -52,12 +52,15 @@ export function syncCabinetSlots(): Promise<void> {
 }
 
 /**
- * Reads the cabinet's latest (retained) slot state, or null if none arrives in time
+ * Reads the cabinet's latest (retained) slot state, or null if none arrives in time.
+ * Also picks up the cabinet's online/offline status for the dashboard.
  */
 function readSlotState(timeoutMs = 3000): Promise<CabinetSlotState[] | null> {
   return new Promise((resolve) => {
     const client = mqtt.connect(getEffectiveBrokerUrl(), getBrokerOptions('astrix-sync'));
     let finished = false;
+    let slots: CabinetSlotState[] | null = null;
+    let statusSeen = false;
 
     const finish = (value: CabinetSlotState[] | null) => {
       if (finished) return;
@@ -69,21 +72,27 @@ function readSlotState(timeoutMs = 3000): Promise<CabinetSlotState[] | null> {
       resolve(value);
     };
 
-    const timer = setTimeout(() => finish(null), timeoutMs);
+    const timer = setTimeout(() => finish(slots), timeoutMs);
 
     client.on('connect', () => {
-      client.subscribe(MQTT_TOPIC_SLOTS, { qos: 0 }, (err) => {
+      client.subscribe([MQTT_TOPIC_SLOTS, MQTT_TOPIC_STATUS], { qos: 0 }, (err) => {
         if (err) finish(null);
       });
     });
 
-    client.on('message', (_topic, message) => {
-      try {
-        const data = JSON.parse(message.toString());
-        if (Array.isArray(data.slots)) finish(data.slots);
-      } catch {
-        // Ignore anything that isn't a slot state message
+    client.on('message', (topic, message) => {
+      if (topic === MQTT_TOPIC_STATUS) {
+        rememberCabinetStatus(message.toString());
+        statusSeen = true;
+      } else {
+        try {
+          const data = JSON.parse(message.toString());
+          if (Array.isArray(data.slots)) slots = data.slots;
+        } catch {
+          // Ignore anything that isn't a slot state message
+        }
       }
+      if (slots && statusSeen) finish(slots);
     });
 
     client.on('error', () => finish(null));

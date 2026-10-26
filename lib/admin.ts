@@ -1,12 +1,12 @@
 import { getSessionIndex } from './session';
 
 /**
- * Admin accounts, e.g. ADMIN_INDEXES=250529E. Checked on the server against the
- * signed-in session only. Falls back to 250529E when the variable is not set.
+ * Admin accounts, e.g. ADMIN_INDEXES=ADMIN-ASTRIX. Checked on the server against the
+ * signed-in session only. Falls back to ADMIN-ASTRIX when the variable is not set.
  */
 export function isAdminIndex(indexNo: string | null | undefined): boolean {
   if (!indexNo) return false;
-  const adminIndexes = (process.env.ADMIN_INDEXES || '250529E')
+  const adminIndexes = (process.env.ADMIN_INDEXES || 'ADMIN-ASTRIX')
     .split(',')
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean);

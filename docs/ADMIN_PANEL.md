@@ -1,10 +1,12 @@
 # ASTRIX Admin Panel
 
-The admin panel is at **`/admin`**. Only admin accounts can open it. Admins are listed in the `ADMIN_INDEXES` environment variable (comma-separated); if it is not set, the admin is **`250529E`**. Admins sign in with their normal password. Admins also see an **"Open admin panel"** link on the dashboard.
+The admin panel is at **`/admin`**. Only admin accounts can open it. Admins are listed in the `ADMIN_INDEXES` environment variable (comma-separated); if it is not set, the admin is **`ADMIN-ASTRIX`**. Admins sign in with their normal password. Admins also see an **"Open admin panel"** link on the dashboard.
 
 Alerts appear **while an admin has the panel open**. The panel refreshes every 5 s, and each refresh also runs the server checks. New alerts play a short sound and, if allowed (bell button), show a browser notification.
 
 ## One-time setup
+The admin account (`admin-astrix`) can't be made through signup. Run `node scripts/create-admin.mjs`, enter an email and password, and paste the SQL it prints into the Supabase SQL Editor. Running it again resets that account's password. Sign in with `admin-astrix` as the index number.
+
 Run [`supabase/migrations/20261026_admin_panel.sql`](../supabase/migrations/20261026_admin_panel.sql) once in the Supabase SQL Editor. It creates the `admin_events` table (activity log + alerts) and adds `users.is_locked`. Until it is run, the app works normally, but the panel shows no alerts or activity and accounts can't be locked.
 
 ## What the panel shows and does

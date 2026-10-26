@@ -91,11 +91,14 @@ export async function POST(request: Request) {
     await logActivity('LOGIN', `${cleanIndex} signed in`, { index_no: cleanIndex, actor: cleanIndex });
 
     // Upgrade a legacy plaintext password to a salted hash on first successful sign-in
+    let storedPassword: string = user.password;
     if (isLegacyPlaintext(user.password)) {
-      await supabaseAdmin
+      const upgraded = hashPassword(cleanPassword);
+      const { error: upgradeError } = await supabaseAdmin
         .from('users')
-        .update({ password: hashPassword(cleanPassword), updated_at: new Date().toISOString() })
+        .update({ password: upgraded, updated_at: new Date().toISOString() })
         .eq('index_no', cleanIndex);
+      if (!upgradeError) storedPassword = upgraded;
     }
 
     const response = NextResponse.json({
@@ -109,7 +112,7 @@ export async function POST(request: Request) {
     });
 
     // Signed, httpOnly session cookie — the API reads the student from this
-    const session = createSessionValue(user.index_no);
+    const session = createSessionValue(user.index_no, storedPassword);
     response.cookies.set(SESSION_COOKIE, session.value, {
       ...sessionCookieOptions,
       maxAge: session.maxAgeSeconds,

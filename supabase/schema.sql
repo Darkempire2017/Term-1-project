@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS public.umbrellas (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- A student can hold at most one slot for a borrow in progress
+CREATE UNIQUE INDEX IF NOT EXISTS one_held_slot_per_student
+    ON public.umbrellas (borrowed_user)
+    WHERE availability = TRUE AND borrowed_user IS NOT NULL;
+
 -- 3. BORROW RECORDS (loan history)
 CREATE TABLE IF NOT EXISTS public.borrow_records (
     record_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

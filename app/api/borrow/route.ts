@@ -10,6 +10,9 @@ import { countRecentActivity, logActivity, raiseAlert } from '@/lib/events';
 // The cabinet takes up to ~20 s to report the result, so allow the route to wait
 export const maxDuration = 60;
 
+const BORROW_IN_PROGRESS_MESSAGE =
+  'You already have a borrow in progress. Please wait for it to finish (or contact the station team if a slot opened for you).';
+
 /**
  * Borrow: claim a free slot, tell the phone which slot it got, send BORROW to the
  * cabinet, wait for its response, and only then record the loan.
@@ -69,6 +72,27 @@ export async function POST(request: Request) {
       );
     }
 
+    // A borrow of theirs is already in progress (or held after the cabinet never
+    // answered): don't let a second request open another slot at the same time
+    const { data: heldByMe, error: heldError } = await supabaseAdmin
+      .from('umbrellas')
+      .select('slot')
+      .eq('availability', true)
+      .eq('borrowed_user', indexNo)
+      .limit(1);
+
+    if (heldError) {
+      console.error('❌ [API/Borrow] Held-slot lookup error:', heldError.message);
+      return NextResponse.json({ success: false, message: 'Could not check the station. Please try again.' }, { status: 500 });
+    }
+
+    if (heldByMe && heldByMe.length > 0) {
+      return NextResponse.json(
+        { success: false, message: BORROW_IN_PROGRESS_MESSAGE },
+        { status: 409 }
+      );
+    }
+
     // Known to be offline: say so straight away, without reserving a slot
     if (getCachedCabinetOnline() === false) {
       return NextResponse.json(
@@ -93,16 +117,54 @@ export async function POST(request: Request) {
 
     let claimed: { slot: number; umbrella_id: string } | null = null;
     for (const { slot } of freeSlots || []) {
-      const { data: rows } = await supabaseAdmin
+      const { data: rows, error: claimError } = await supabaseAdmin
         .from('umbrellas')
         .update({ borrowed_user: indexNo })
         .eq('slot', slot)
         .eq('availability', true)
         .is('borrowed_user', null)
         .select('slot, umbrella_id');
+
+      // 23505 = unique violation from one_held_slot_per_student: another request
+      // from this student claimed a slot a moment ago (two taps / two tabs)
+      if (claimError?.code === '23505') {
+        return NextResponse.json(
+          { success: false, message: BORROW_IN_PROGRESS_MESSAGE },
+          { status: 409 }
+        );
+      }
+      if (claimError) {
+        console.error('❌ [API/Borrow] Slot claim error:', claimError.message);
+        continue;
+      }
       if (rows && rows.length > 0) {
         claimed = rows[0];
         break;
+      }
+    }
+
+    // Belt and braces (also covers a database without the unique index): if this
+    // student now holds more than one slot, another request won the race. Give
+    // this slot back and stop, so only one slot ever opens.
+    if (claimed) {
+      const { data: myHolds } = await supabaseAdmin
+        .from('umbrellas')
+        .select('slot')
+        .eq('availability', true)
+        .eq('borrowed_user', indexNo)
+        .order('slot', { ascending: true });
+
+      if (myHolds && myHolds.length > 1 && myHolds[0].slot !== claimed.slot) {
+        await supabaseAdmin
+          .from('umbrellas')
+          .update({ borrowed_user: null })
+          .eq('slot', claimed.slot)
+          .eq('availability', true)
+          .eq('borrowed_user', indexNo);
+        return NextResponse.json(
+          { success: false, message: BORROW_IN_PROGRESS_MESSAGE },
+          { status: 409 }
+        );
       }
     }
 
@@ -229,11 +291,6 @@ async function completeBorrow(
   const now = new Date();
   const dueTime = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24h window
 
-  await supabaseAdmin
-    .from('umbrellas')
-    .update({ availability: false, borrowed_user: indexNo })
-    .eq('slot', claimed.slot);
-
   const { error: insertError } = await supabaseAdmin.from('borrow_records').insert({
     umbrella_id: claimed.umbrella_id,
     index_no: indexNo,
@@ -241,6 +298,12 @@ async function completeBorrow(
     borrowed_time: now.toISOString(),
     due_time: dueTime.toISOString(),
   });
+
+  // The umbrella has physically left either way, so the slot is out
+  await supabaseAdmin
+    .from('umbrellas')
+    .update({ availability: false, borrowed_user: indexNo })
+    .eq('slot', claimed.slot);
 
   if (insertError) {
     console.error('❌ [API/Borrow] Loan insert error:', insertError.message);

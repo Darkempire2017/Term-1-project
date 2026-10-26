@@ -16,7 +16,10 @@ export async function GET() {
   try {
     const indexNo = await getSessionIndex();
     if (!indexNo) {
-      return NextResponse.json({ success: false, message: 'Please sign in.' }, { status: 401 });
+      // No session, or the account was locked / deleted / had its password changed
+      const response = NextResponse.json({ success: false, message: 'Please sign in.' }, { status: 401 });
+      response.cookies.set(SESSION_COOKIE, '', { ...sessionCookieOptions, maxAge: 0 });
+      return response;
     }
 
     // After answering, bring the database in step with what is physically in the

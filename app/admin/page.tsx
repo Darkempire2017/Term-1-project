@@ -16,6 +16,7 @@ import {
   ArrowLeft,
   Search,
 } from 'lucide-react';
+import { formatStationDateTime } from '@/lib/time';
 
 // =====================================================================
 // Admin panel. Only admin accounts (ADMIN_INDEXES) can load the data.
@@ -261,7 +262,7 @@ export default function AdminPage() {
     <div key={e.id} className={`p-3 rounded-xl border-l-4 ${e.kind === 'ALERT' ? severityStyle[e.severity] : 'border-l-slate-300 bg-white'} border border-slate-200/70 space-y-1`}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wide">{e.type.replace(/_/g, ' ')}</span>
-        <span className="text-[10px] text-slate-400" title={new Date(e.created_at).toLocaleString()}>{timeAgo(e.created_at)}</span>
+        <span className="text-[10px] text-slate-400" title={formatStationDateTime(e.created_at)}>{timeAgo(e.created_at)}</span>
       </div>
       <p className="text-xs text-slate-800 leading-relaxed">{e.message}</p>
       <div className="flex items-center justify-between gap-2">
@@ -496,7 +497,7 @@ export default function AdminPage() {
                   }`}>{l.status}</span>
                 </div>
                 <p className="text-[11px] text-slate-600">
-                  {l.umbrella_id} · borrowed {timeAgo(l.borrowed_time)} · {l.returned_time ? `returned ${timeAgo(l.returned_time)}` : `due ${new Date(l.due_time).toLocaleString()}`}
+                  {l.umbrella_id} · borrowed {timeAgo(l.borrowed_time)} · {l.returned_time ? `returned ${timeAgo(l.returned_time)}` : `due ${formatStationDateTime(l.due_time)}`}
                 </p>
                 <div className="flex flex-wrap gap-1.5">
                   {l.status !== 'RETURNED' && (

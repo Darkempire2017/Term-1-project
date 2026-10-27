@@ -113,9 +113,9 @@
   * Return Command: `{"action": "RETURN", "slot": 1}`
 * **Response Topic (ESP32 ➔ Server):** `astrix-umbrella/cabinet/response`
   * **Case 1 (Borrow Success):** `{"action": "BORROW", "slot": 1, "status": "SUCCESS", "message": "Umbrella taken from Slot 1. Closing the lock."}`
-  * **Case 2 (Borrow Fail - Not Taken):** `{"action": "BORROW", "slot": 1, "status": "FAIL", "reason": "NOT_TAKEN", "message": "Umbrella was NOT taken from Slot 1 after 5 checks. Closing the lock."}`
+  * **Case 2 (Borrow Fail - Not Taken):** `{"action": "BORROW", "slot": 1, "status": "FAIL", "reason": "NOT_TAKEN", "message": "Umbrella was NOT taken from Slot 1 after 7 checks. The lock is closed."}`
   * **Case 3 (Return Success):** `{"action": "RETURN", "slot": 1, "status": "SUCCESS", "message": "Umbrella 1 returned to Slot 1. Closing the lock."}`
-  * **Case 4 (Return Fail - No Umbrella):** `{"action": "RETURN", "slot": 1, "status": "FAIL", "reason": "NO_UMBRELLA", "message": "No umbrella returned to Slot 1 after 5 checks. Closing the lock."}`
+  * **Case 4 (Return Fail - No Umbrella):** `{"action": "RETURN", "slot": 1, "status": "FAIL", "reason": "NO_UMBRELLA", "message": "No umbrella returned to Slot 1 after 7 checks. The lock is closed."}`
   * **Case 5 (Return Fail - Wrong Umbrella):** `{"action": "RETURN", "slot": 1, "status": "FAIL", "reason": "WRONG_UMBRELLA", "message": "Wrong umbrella in Slot 1. Leaving the slot UNLOCKED - take it out and return Umbrella 1."}`
 
 ---

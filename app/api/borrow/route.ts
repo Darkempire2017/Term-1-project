@@ -324,7 +324,7 @@ async function completeBorrow(
       .eq('index_no', indexNo)
       .maybeSingle();
     if (user?.email) {
-      await sendBorrowReceiptEmail(user.email, user.username || 'Student', claimed.slot, claimed.umbrella_id, dueTime);
+      await sendBorrowReceiptEmail(user.email, user.username || 'Student', claimed.slot, claimed.umbrella_id, now, dueTime);
     }
   } catch (e) {
     console.warn('⚠️ [API/Borrow] Receipt email warning:', e);

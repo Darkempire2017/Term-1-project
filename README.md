@@ -55,9 +55,9 @@ For the existing live database, run [`supabase/migrations/20261025_lockdown.sql`
 | Case | Response |
 | :--- | :--- |
 | Borrow success | `{"action":"BORROW","slot":X,"status":"SUCCESS","message":"Umbrella taken from Slot X. Closing the lock."}` |
-| Borrow fail | `{"action":"BORROW","slot":X,"status":"FAIL","reason":"NOT_TAKEN","message":"Umbrella was NOT taken from Slot X after 5 checks. Closing the lock."}` |
+| Borrow fail | `{"action":"BORROW","slot":X,"status":"FAIL","reason":"NOT_TAKEN","message":"Umbrella was NOT taken from Slot X after 7 checks. The lock is closed."}` |
 | Return success | `{"action":"RETURN","slot":X,"status":"SUCCESS","message":"Umbrella X returned to Slot X. Closing the lock."}` |
-| Return fail | `{"action":"RETURN","slot":X,"status":"FAIL","reason":"NO_UMBRELLA","message":"No umbrella returned to Slot X after 5 checks. Closing the lock."}` |
+| Return fail | `{"action":"RETURN","slot":X,"status":"FAIL","reason":"NO_UMBRELLA","message":"No umbrella returned to Slot X after 7 checks. The lock is closed."}` |
 | Wrong umbrella | `{"action":"RETURN","slot":X,"status":"FAIL","reason":"WRONG_UMBRELLA","message":"Wrong umbrella in Slot X. Leaving the slot UNLOCKED - take it out and return Umbrella X."}` |
 
 * **Slot state** (cabinet ➔ server): `astrix-umbrella/cabinet/slots`, **retained**. Sent whenever what is in a slot changes, and at least once a minute:

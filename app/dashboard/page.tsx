@@ -15,9 +15,10 @@ import {
   Info,
 } from 'lucide-react';
 import { BottomNav } from '@/components/BottomNav';
-import type { MeResponse, PublicSlot } from '@/lib/types';
+import type { MeResponse } from '@/lib/types';
 import { useViewMode } from '@/components/ViewModeContext';
 import { formatStationDueTime } from '@/lib/time';
+import { beginStationRequest, clearStationCache, isCurrentStationRequest, restoreStationUser, setStationResponse, useStationCache } from '@/lib/stationCache';
 import './dashboard.css';
 
 // The lock takes ~4 s to open (message delivery + 2.7 s servo turn); the countdown
@@ -155,29 +156,26 @@ async function readCabinetResponse(
 export default function DashboardPage() {
   const router = useRouter();
   const { isStudentMode } = useViewMode();
-  const [currentUserIndex, setCurrentUserIndex] = useState('');
-  const [currentUserName, setCurrentUserName] = useState('');
+  const station = useStationCache();
+  const currentUserName = station.me?.user.username || station.user?.username || '';
 
-  // Developer (hardware testing) access is decided by the server
-  const [isDevAccount, setIsDevAccount] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  // Cabinet online/offline from the server (null = not known yet)
-  const [cabinetOnline, setCabinetOnline] = useState<boolean | null>(null);
+  // The last confirmed response is visible immediately when returning to this page.
+  const isDevAccount = station.me?.is_dev ?? false;
+  const isAdmin = station.me?.is_admin ?? false;
+  const cabinetOnline = station.me?.cabinet_online ?? null;
   const cabinetOffline = cabinetOnline === false;
-
-  // Slot states from the server (no placeholder tag IDs)
-  const [slots, setSlots] = useState<PublicSlot[]>([]);
+  const slots = station.me?.slots ?? [];
 
   // Active borrow state (Determines State A vs State B)
-  const [activeLoan, setActiveLoan] = useState<{
+  const [loanOverride, setActiveLoan] = useState<{
     record_id?: string;
     umbrella_id: string;
     slot: number | null;
     borrowed_time: string;
     due_time: string;
     is_overdue?: boolean;
-  } | null>(null);
+  } | null | undefined>(undefined);
+  const activeLoan = loanOverride === undefined ? station.me?.active_loan ?? null : loanOverride;
 
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<'borrow' | 'return' | null>(null);
@@ -216,24 +214,20 @@ export default function DashboardPage() {
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
   }, [screenGlow]);
 
-  // Show the cached name instantly while the server confirms the session
+  // The login response supplies the name, even before the first station fetch.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('astrix_user');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        setCurrentUserIndex((parsed.index_no || '').toUpperCase());
-        setCurrentUserName(parsed.username || 'Student');
-      }
-    } catch {}
+    restoreStationUser();
   }, []);
 
   // Fetch profile, slots and active loan from the server (session cookie)
   const refreshStationData = useCallback(async () => {
+    const request = beginStationRequest();
     try {
       const res = await fetch('/api/me', { cache: 'no-store' });
+      if (!isCurrentStationRequest(request)) return;
 
       if (res.status === 401) {
+        clearStationCache();
         localStorage.removeItem('astrix_user');
         sessionStorage.clear();
         router.replace('/login?notice=session_expired');
@@ -242,14 +236,8 @@ export default function DashboardPage() {
 
       const json: MeResponse = await res.json();
       if (!res.ok || !json.success) return;
-
-      setCurrentUserIndex(json.user.index_no);
-      setCurrentUserName(json.user.username || 'Student');
-      setIsDevAccount(json.is_dev);
-      setIsAdmin(json.is_admin);
-      setCabinetOnline(json.cabinet_online);
-      setSlots(json.slots);
-      setActiveLoan(json.active_loan);
+      setStationResponse(json, request);
+      setActiveLoan(undefined);
     } catch (err: any) {
       console.warn('Station refresh note:', err.message);
     } finally {

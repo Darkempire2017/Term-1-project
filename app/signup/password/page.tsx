@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Lock, Eye, EyeOff, ArrowRight, ArrowLeft, Check, AlertCircle } from 'lucide-react';
 import { StormHeader } from '@/components/Storm';
 import { SignupProgress } from '@/components/SignupProgress';
+import { seedStationUser } from '@/lib/stationCache';
 import '../../theme-pages.css';
 
 export default function SignUpPasswordPage() {
@@ -92,6 +93,7 @@ export default function SignUpPasswordPage() {
       // Cache user info for instant display
       if (json.user) {
         localStorage.setItem('astrix_user', JSON.stringify(json.user));
+        seedStationUser(json.user);
       }
 
       // Direct redirect to Dashboard!

@@ -12,41 +12,28 @@ import { BottomNav } from '@/components/BottomNav';
 import { StormHeader } from '@/components/Storm';
 import type { MeResponse } from '@/lib/types';
 import { formatStationDueTime } from '@/lib/time';
+import { beginStationRequest, clearStationCache, isCurrentStationRequest, restoreStationUser, setStationResponse, useStationCache } from '@/lib/stationCache';
 import '../theme-pages.css';
-
-interface StudentProfile {
-  index_no: string;
-  username: string;
-  email: string;
-  is_verified?: boolean;
-}
 
 export default function ProfilePage() {
   const router = useRouter();
-  const [profile, setProfile] = useState<StudentProfile>({
-    index_no: '',
-    username: '',
-    email: '',
-  });
-
-  const [activeBorrow, setActiveBorrow] = useState<{
-    umbrella_id: string;
-    borrowed_time: string;
-    due_time: string;
-    is_overdue?: boolean;
-    slot?: number;
-  } | null>(null);
-
+  const station = useStationCache();
+  const profile = station.me?.user ?? station.user ?? { index_no: '', username: '', email: '' };
+  const activeBorrow = station.me?.active_loan ?? null;
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    restoreStationUser();
     const fetchUserData = async () => {
+      const request = beginStationRequest();
       // Profile and loan come from the server, based on the session cookie
       try {
         const res = await fetch('/api/me', { cache: 'no-store' });
+        if (!isCurrentStationRequest(request)) return;
 
         if (res.status === 401) {
           // No session, or the account no longer exists: back to sign in
+          clearStationCache();
           localStorage.removeItem('astrix_user');
           sessionStorage.clear();
           router.replace('/login?notice=session_expired');
@@ -55,25 +42,7 @@ export default function ProfilePage() {
 
         const json: MeResponse = await res.json();
         if (!res.ok || !json.success) return;
-
-        setProfile({
-          index_no: json.user.index_no,
-          username: json.user.username,
-          email: json.user.email,
-          is_verified: true,
-        });
-
-        setActiveBorrow(
-          json.active_loan
-            ? {
-                umbrella_id: json.active_loan.umbrella_id,
-                borrowed_time: json.active_loan.borrowed_time,
-                due_time: json.active_loan.due_time,
-                is_overdue: json.active_loan.is_overdue,
-                slot: json.active_loan.slot ?? undefined,
-              }
-            : null
-        );
+        setStationResponse(json, request);
       } catch (err) {
         console.warn('Profile lookup warning:', err);
       } finally {
@@ -90,6 +59,7 @@ export default function ProfilePage() {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
     } catch {}
+    clearStationCache();
     localStorage.removeItem('astrix_user');
     sessionStorage.clear();
     router.push('/login');

@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Lock, User, ArrowRight, Eye, EyeOff, AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { useViewMode } from '@/components/ViewModeContext';
 import { StormHeader, CloudMark } from '@/components/Storm';
+import { ContactFooter } from '@/components/ContactFooter';
 import { seedStationUser } from '@/lib/stationCache';
 
 function LoginForm() {
@@ -268,6 +269,7 @@ function LoginForm() {
         </form>
 
         <p className="mt-8 text-center text-[9px] font-bold tracking-[3px] text-brand-200">ASTRIX</p>
+        <ContactFooter className="mt-3" />
       </section>
 
       {/* Forgot Password Modal: bottom sheet on phones */}

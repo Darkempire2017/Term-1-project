@@ -15,6 +15,7 @@ import {
   Info,
 } from 'lucide-react';
 import { BottomNav } from '@/components/BottomNav';
+import { ContactFooter } from '@/components/ContactFooter';
 import type { MeResponse } from '@/lib/types';
 import { useViewMode } from '@/components/ViewModeContext';
 import { formatStationDueTime } from '@/lib/time';
@@ -994,6 +995,8 @@ export default function DashboardPage() {
             </button>
           </div>
         )}
+
+        <ContactFooter className="mt-6 pb-1" />
       </main>
 
       {/* Persistent Bottom Nav */}

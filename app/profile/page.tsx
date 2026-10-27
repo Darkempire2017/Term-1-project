@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { BottomNav } from '@/components/BottomNav';
 import { StormHeader } from '@/components/Storm';
+import { ContactFooter } from '@/components/ContactFooter';
 import type { MeResponse } from '@/lib/types';
 import { formatStationDueTime } from '@/lib/time';
 import { beginStationRequest, clearStationCache, isCurrentStationRequest, restoreStationUser, setStationResponse, useStationCache } from '@/lib/stationCache';
@@ -126,6 +127,8 @@ export default function ProfilePage() {
         <button type="button" onClick={handleSignOut} className="astrix-sign-out">
           <LogOut size={18} aria-hidden="true" /> Sign out
         </button>
+
+        <ContactFooter className="pt-2 pb-1" />
       </main>
 
       <BottomNav />

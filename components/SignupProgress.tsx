@@ -1,6 +1,6 @@
 import { Check } from 'lucide-react';
 
-export function SignupProgress({ step }: { step: 2 | 3 }) {
+export function SignupProgress({ step }: { step: 1 | 2 | 3 }) {
   const steps = ['Scan ID', 'Student details', step === 2 ? 'Complete' : 'Password'];
   return (
     <div className="astrix-progress" aria-label={`Registration step ${step} of 3`}>

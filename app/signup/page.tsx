@@ -35,6 +35,56 @@ const parseIndex = (rawText: string): string | null => {
   return INDEX_PATTERN.test(cleaned) ? cleaned : null;
 };
 
+const NO_BARCODE_MESSAGE =
+  'No barcode found in that photo. Take it closer, with the card flat and no glare on the barcode.';
+
+// Phone photos are 12-48 MP, but Safari can't draw anything over ~16.7 MP on a canvas
+// (the picture comes out blank). Each photo is shrunk first and tried in these ways:
+// [longest side in px, centre crop, turned 90°]
+const PHOTO_ATTEMPTS: [number, number, boolean][] = [
+  [2000, 1, false],
+  [1200, 1, false],
+  [2000, 0.6, false],
+  [1600, 1, true],
+];
+
+const loadPhoto = (file: File): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('PHOTO_UNREADABLE'));
+    };
+    img.src = url;
+  });
+
+// Draws a shrunk (and optionally cropped / turned) copy of the photo and returns it as a JPEG file
+const photoVariant = async (img: HTMLImageElement, maxSide: number, crop: number, turn: boolean): Promise<File> => {
+  const sw = img.naturalWidth * crop;
+  const sh = img.naturalHeight * crop;
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const w = Math.round(sw * scale);
+  const h = Math.round(sh * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = turn ? h : w;
+  canvas.height = turn ? w : h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('PHOTO_UNREADABLE');
+  if (turn) {
+    ctx.translate(h, 0);
+    ctx.rotate(Math.PI / 2);
+  }
+  ctx.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, 0, 0, w, h);
+  const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
+  if (!blob) throw new Error('PHOTO_UNREADABLE');
+  return new File([blob], 'id.jpg', { type: 'image/jpeg' });
+};
+
 export default function BarcodeScanPage() {
   const router = useRouter();
   const scannerRef = useRef<any>(null);
@@ -259,35 +309,53 @@ export default function BarcodeScanPage() {
   // Photo upload fallback
   const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
 
-    try {
-      setIsChecking(true);
-      setValidationError(null);
-      setExistingUserError(null);
+    setIsChecking(true);
+    setValidationError(null);
+    setExistingUserError(null);
 
+    let decodedText: string | null = null;
+    try {
+      const img = await loadPhoto(file);
       const { Html5Qrcode } = await import('html5-qrcode');
       const fileScanner = new Html5Qrcode('astrix-file-scanner');
-      const decodedText = await fileScanner.scanFile(file, false);
-      fileScanner.clear();
-
-      const index_no = parseIndex(decodedText);
-      if (!index_no) {
-        setValidationError(
-          'Incorrect barcode. Please scan the front side of your University ID card.'
-        );
-        return;
+      try {
+        for (const [maxSide, crop, turn] of PHOTO_ATTEMPTS) {
+          try {
+            decodedText = await fileScanner.scanFile(await photoVariant(img, maxSide, crop, turn), false);
+            break;
+          } catch {
+            // No barcode in this version of the photo; try the next one
+          }
+        }
+      } finally {
+        try {
+          fileScanner.clear();
+        } catch {}
       }
-      setIsChecking(false);
-      await acceptIndex(index_no);
     } catch (err) {
+      console.warn('Photo scan error:', err);
+      setIsChecking(false);
+      setValidationError("Couldn't open that photo. Please take a new photo or choose a JPEG or PNG.");
+      return;
+    }
+
+    setIsChecking(false);
+    if (IS_DEV_BUILD && decodedText) setLastRawScan(`${decodedText} (photo)`);
+    if (!decodedText) {
+      setValidationError(NO_BARCODE_MESSAGE);
+      return;
+    }
+    const index_no = parseIndex(decodedText);
+    if (!index_no) {
       setValidationError(
         'Incorrect barcode. Please scan the front side of your University ID card.'
       );
-    } finally {
-      setIsChecking(false);
-      e.target.value = '';
+      return;
     }
+    await acceptIndex(index_no);
   };
 
   // Mount/unmount: start the camera once, release it cleanly when leaving
@@ -387,7 +455,9 @@ export default function BarcodeScanPage() {
             <div className="flex items-start space-x-2">
               <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <p className="font-bold text-amber-950 text-xs">Incorrect Barcode</p>
+                <p className="font-bold text-amber-950 text-xs">
+                  {validationError === NO_BARCODE_MESSAGE ? 'No Barcode Found' : 'Incorrect Barcode'}
+                </p>
                 <p className="leading-relaxed text-amber-800">{validationError}</p>
               </div>
             </div>

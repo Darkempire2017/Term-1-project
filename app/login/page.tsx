@@ -3,8 +3,9 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Umbrella, Lock, User, ArrowRight, Eye, EyeOff, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Lock, User, ArrowRight, Eye, EyeOff, AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { useViewMode } from '@/components/ViewModeContext';
+import { StormHeader, CloudMark } from '@/components/Storm';
 
 function LoginForm() {
   const router = useRouter();
@@ -139,172 +140,167 @@ function LoginForm() {
     setError(null);
   };
 
+  const inputClass =
+    'w-full py-3.5 rounded-2xl bg-brand-50 border border-brand-100 text-sm text-brand-900 placeholder-brand-300 placeholder:normal-case placeholder:font-body focus:outline-none focus:bg-white focus:border-brand-500 focus:ring-4 focus:ring-brand-500/15 transition';
+  const labelClass = 'text-[11px] font-bold text-brand-900/70 uppercase tracking-[.14em]';
+  const primaryButton =
+    'rounded-2xl bg-gradient-to-b from-brand-500 to-brand-700 text-white font-bold shadow-lg shadow-brand-500/30 flex items-center justify-center gap-2 hover:brightness-110 active:scale-[.99] transition disabled:opacity-60';
+  const secondaryButton =
+    'rounded-2xl border-2 border-brand-100 text-brand-700 font-bold flex items-center justify-center gap-2 hover:bg-brand-50 hover:border-brand-200 transition';
+
   return (
-    <div className="flex-1 flex flex-col justify-between p-6 bg-white select-none">
-      {/* Top Header */}
-      <div className="pt-6 space-y-4">
-        <div className="flex items-center justify-end">
+    <div className="flex-1 flex flex-col font-body bg-white select-none">
+      {/* Rainy header, continues the welcome screen */}
+      <StormHeader rain className="px-6 pt-10 pb-16">
+        <div className="flex justify-end min-h-[26px]">
           {!isStudentMode && (
             <button
               type="button"
               onClick={fillDemoStudent}
-              className="text-[11px] text-sky-600 hover:text-sky-700 font-bold bg-sky-50 hover:bg-sky-100/80 px-2.5 py-1 rounded-lg transition"
+              className="text-[11px] font-semibold text-white/80 bg-white/10 hover:bg-white/20 border border-white/15 px-2.5 py-1 rounded-full transition"
             >
               Fill dev index (DEV001)
             </button>
           )}
         </div>
-
-        <div className="space-y-1">
-          <div className="w-12 h-12 rounded-2xl bg-sky-600 text-white flex items-center justify-center shadow-lg shadow-sky-600/30 mb-3">
-            <Umbrella className="w-6 h-6" />
-          </div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Sign In</h1>
-          <p className="text-xs text-slate-500">
-            Enter your University Index Number to access the umbrella station.
+        <div className="mt-6 animate-rise">
+          <CloudMark className="w-16 h-16 -ml-1 drop-shadow-lg" />
+          <h1 className="font-display font-bold text-[40px] leading-[1.05] tracking-tight mt-2">Welcome back</h1>
+          <p className="text-sm text-white/75 mt-2 max-w-[18rem]">
+            Sign in with your University Index Number to borrow an umbrella.
           </p>
         </div>
-      </div>
+      </StormHeader>
 
-      {/* Form Content */}
-      <form onSubmit={handleSignIn} className="my-auto py-6 space-y-4">
-        {error && (
-          <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start space-x-2 animate-in fade-in">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {success && (
-          <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-start space-x-2 animate-in fade-in leading-relaxed">
-            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
-            <span>{success}</span>
-          </div>
-        )}
-
-        {/* Index Number */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-            Index No.
-          </label>
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-              <User className="w-4 h-4" />
+      {/* Form sheet */}
+      <section className="relative -mt-8 flex-1 bg-white rounded-t-[32px] px-6 pt-8 pb-8 shadow-[0_-12px_30px_-12px_rgba(15,30,61,.35)]">
+        <form onSubmit={handleSignIn} className="space-y-5 animate-rise [animation-delay:.08s]">
+          {error && (
+            <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{error}</span>
             </div>
-            <input
-              type="text"
-              value={indexNo}
-              onChange={(e) => setIndexNo(e.target.value)}
-              placeholder="e.g. 210042A"
-              className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 uppercase font-mono tracking-wide transition"
-              required
-            />
-          </div>
-        </div>
-
-        {/* Password */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Password
-            </label>
-            <button
-              type="button"
-              onClick={handleOpenForgotModal}
-              className="text-xs font-medium text-sky-600 hover:text-sky-700 hover:underline"
-            >
-              Forgot Password?
-            </button>
-          </div>
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-              <Lock className="w-4 h-4" />
-            </div>
-            <input
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full pl-10 pr-10 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition"
-              required
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600"
-            >
-              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
-          </div>
-        </div>
-
-        {/* Sign In Button */}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full mt-2 py-3.5 px-4 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow-md shadow-sky-600/30 flex items-center justify-center space-x-2 transition disabled:opacity-60 active:scale-[0.99]"
-        >
-          {loading ? (
-            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-          ) : (
-            <>
-              <span>Sign In</span>
-              <ArrowRight className="w-4 h-4" />
-            </>
           )}
-        </button>
 
-        {/* Prominent Register / Sign Up Section */}
-        <div className="pt-1 text-center space-y-2">
-          <div className="relative flex py-2 items-center">
-            <div className="flex-grow border-t border-slate-200"></div>
-            <span className="flex-shrink mx-3 text-[11px] text-slate-400 font-medium">New student?</span>
-            <div className="flex-grow border-t border-slate-200"></div>
+          {success && (
+            <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-start gap-2 leading-relaxed">
+              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+              <span>{success}</span>
+            </div>
+          )}
+
+          {/* Index Number */}
+          <div className="space-y-1.5">
+            <label className={labelClass}>Index No.</label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-brand-300">
+                <User className="w-4 h-4" />
+              </div>
+              <input
+                type="text"
+                value={indexNo}
+                onChange={(e) => setIndexNo(e.target.value)}
+                placeholder="e.g. 210042A"
+                className={`${inputClass} pl-11 pr-4 uppercase font-mono tracking-wide`}
+                required
+              />
+            </div>
           </div>
 
-          <Link
-            href="/signup"
-            className="w-full py-3.5 px-4 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-800 font-bold text-xs border border-slate-200 shadow-sm flex items-center justify-center space-x-2 transition active:scale-[0.99]"
-          >
-            <span>Register with Student ID</span>
-          </Link>
-        </div>
-      </form>
+          {/* Password */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className={labelClass}>Password</label>
+              <button
+                type="button"
+                onClick={handleOpenForgotModal}
+                className="text-xs font-semibold text-brand-500 hover:text-brand-700"
+              >
+                Forgot password?
+              </button>
+            </div>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-brand-300">
+                <Lock className="w-4 h-4" />
+              </div>
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className={`${inputClass} pl-11 pr-11`}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 right-0 pr-4 flex items-center text-brand-300 hover:text-brand-500"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
 
-      {/* Forgot Password Modal */}
+          {/* Sign In Button */}
+          <button type="submit" disabled={loading} className={`w-full mt-1 py-4 text-sm ${primaryButton}`}>
+            {loading ? (
+              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : (
+              <>
+                <span>Sign In</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
+          </button>
+
+          {/* Register */}
+          <div className="flex items-center gap-3 pt-1">
+            <div className="flex-1 h-px bg-brand-100" />
+            <span className="text-[11px] font-medium text-brand-300">New student?</span>
+            <div className="flex-1 h-px bg-brand-100" />
+          </div>
+
+          <Link href="/signup" className={`w-full py-3.5 text-sm ${secondaryButton}`}>
+            Register with Student ID
+          </Link>
+        </form>
+
+        <p className="mt-8 text-center text-[9px] font-bold tracking-[3px] text-brand-200">ASTRIX</p>
+      </section>
+
+      {/* Forgot Password Modal: bottom sheet on phones */}
       {showForgotModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl border border-slate-100 space-y-4">
-            <div className="flex items-start justify-between">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-brand-900/60 backdrop-blur-sm">
+          <div className="w-full max-w-sm bg-white rounded-[28px] p-6 shadow-2xl animate-rise">
+            <div className="flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-lg font-black text-slate-900 tracking-tight">Reset Password</h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Enter your University Index Number to receive a 6-digit reset code at your registered email.
+                <h3 className="font-display font-bold text-2xl text-brand-900">Reset password</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Enter your Index Number and we&apos;ll email you a 6-digit reset code.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowForgotModal(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg text-sm font-bold"
+                className="w-8 h-8 shrink-0 rounded-full bg-brand-50 text-brand-500 hover:bg-brand-100 flex items-center justify-center"
+                aria-label="Close"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             {forgotError && (
-              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start space-x-2 animate-in fade-in">
+              <div className="mt-4 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>{forgotError}</span>
               </div>
             )}
 
-            <form onSubmit={handleSendResetCode} className="space-y-4">
+            <form onSubmit={handleSendResetCode} className="mt-5 space-y-5">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Index Number
-                </label>
+                <label className={labelClass}>Index Number</label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-brand-300">
                     <User className="w-4 h-4" />
                   </div>
                   <input
@@ -312,31 +308,27 @@ function LoginForm() {
                     value={forgotIndex}
                     onChange={(e) => setForgotIndex(e.target.value.toUpperCase())}
                     placeholder="e.g. 250373T"
-                    className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 uppercase font-mono font-semibold transition"
+                    className={`${inputClass} pl-11 pr-4 uppercase font-mono font-semibold placeholder:font-normal`}
                     autoFocus
                     required
                   />
                 </div>
               </div>
 
-              <div className="flex items-center space-x-2 pt-1">
+              <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => setShowForgotModal(false)}
-                  className="flex-1 py-3 px-4 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs transition"
+                  className={`flex-1 py-3 text-xs ${secondaryButton}`}
                 >
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  disabled={forgotLoading}
-                  className="flex-1 py-3 px-4 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-md shadow-sky-600/30 flex items-center justify-center space-x-1.5 transition disabled:opacity-60"
-                >
+                <button type="submit" disabled={forgotLoading} className={`flex-1 py-3 text-xs ${primaryButton}`}>
                   {forgotLoading ? (
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   ) : (
                     <>
-                      <span>Send Code</span>
+                      <span>Send code</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </>
                   )}
@@ -355,7 +347,7 @@ export default function LoginPage() {
     <Suspense
       fallback={
         <div className="flex-1 flex items-center justify-center bg-white">
-          <div className="w-6 h-6 border-2 border-sky-600 border-t-transparent rounded-full animate-spin" />
+          <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
         </div>
       }
     >

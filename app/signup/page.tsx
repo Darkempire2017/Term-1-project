@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  Barcode,
+  ArrowLeft,
   AlertTriangle,
   ShieldCheck,
   RefreshCw,
@@ -13,6 +13,10 @@ import {
   ArrowRight,
   UserCheck,
 } from 'lucide-react';
+import { StormHeader } from '@/components/Storm';
+import { SignupProgress } from '@/components/SignupProgress';
+import '../theme-pages.css';
+import './scanner.css';
 
 // The UoM student ID barcode contains only the index number: 6 digits + a letter
 const INDEX_PATTERN = /^[0-9]{6}[A-Z]$/;
@@ -333,16 +337,23 @@ export default function BarcodeScanPage() {
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between p-6 bg-white select-none overflow-y-auto">
-      {/* Top Header */}
-      <div className="pt-2 space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-500">
-            Step 1 of 3
-          </span>
+    <div className="astrix-theme-page select-none overflow-y-auto">
+      <StormHeader rain className="astrix-theme-header astrix-scanner-header">
+        <div className="astrix-header-top">
+          <Link href="/login" className="astrix-header-back" aria-label="Back to sign in">
+            <ArrowLeft size={21} />
+          </Link>
+          <span className="astrix-step-count">Step 1 of 3</span>
+        </div>
+        <h1 className="astrix-theme-title">Scan your student ID</h1>
+        <p className="astrix-scanner-subtitle">Scan the barcode on your university ID to get started.</p>
+      </StormHeader>
 
-          {IS_DEV_BUILD && (
-            <div className="flex items-center space-x-1">
+      <main className="astrix-theme-sheet astrix-scanner-sheet">
+        <SignupProgress step={1} />
+
+        {IS_DEV_BUILD && (
+            <div className="flex items-center justify-center gap-1 mb-4">
               <button
                 type="button"
                 onClick={() => acceptIndex('250373T')}
@@ -368,22 +379,8 @@ export default function BarcodeScanPage() {
                 Exists
               </button>
             </div>
-          )}
-        </div>
-
-        <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center space-x-2">
-            <span>Scan Student ID</span>
-            <Barcode className="w-6 h-6 text-sky-600" />
-          </h1>
-          <p className="text-xs text-slate-500">
-            Please scan the front side of your University ID card.
-          </p>
-        </div>
-      </div>
-
-      {/* Main Barcode Scanner Body */}
-      <div className="my-auto py-4 space-y-4">
+        )}
+        <div className="space-y-4">
         {/* Error: Non-UoM Barcode Error */}
         {validationError && (
           <div className="p-4 rounded-2xl bg-amber-50 border-2 border-amber-300 text-amber-900 text-xs space-y-2 animate-in fade-in slide-in-from-top-1 shadow-sm">
@@ -445,7 +442,7 @@ export default function BarcodeScanPage() {
         )}
 
         {/* Camera Viewport Container */}
-        <div className="relative w-full aspect-[4/3] rounded-3xl bg-slate-900 overflow-hidden shadow-lg border-2 border-slate-200/80 flex items-center justify-center">
+        <div className="astrix-scanner-viewport relative w-full aspect-[4/3] rounded-3xl overflow-hidden flex items-center justify-center">
           <style jsx global>{`
             #astrix-barcode-reader {
               width: 100% !important;
@@ -489,8 +486,7 @@ export default function BarcodeScanPage() {
                 <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-4 border-l-4 border-sky-400" />
                 <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-4 border-r-4 border-sky-400" />
 
-                {/* Animated Red Laser Scan Line */}
-                <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_8px_#ef4444] animate-pulse top-1/2" />
+                <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-sky-200 to-transparent shadow-[0_0_8px_#dbeafe] animate-pulse top-1/2" />
               </div>
 
               <p className="text-[11px] font-semibold text-white/90 bg-black/60 backdrop-blur-xs px-3 py-1 rounded-full mt-3 border border-white/10">
@@ -538,33 +534,14 @@ export default function BarcodeScanPage() {
           className="hidden"
         />
 
-        {/* Instructions & Fallbacks */}
-        <div className="flex items-center justify-between text-xs text-slate-500 px-1">
-          <div className="flex items-center space-x-1.5">
-            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span className="font-medium text-[11px]">Scanned on your phone. Nothing is uploaded.</span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="text-[11px] font-bold text-sky-600 hover:text-sky-700 underline inline-flex items-center space-x-1"
-          >
-            <Upload className="w-3 h-3" />
-            <span>Upload Photo Instead</span>
-          </button>
+        <button type="button" onClick={() => fileInputRef.current?.click()} className="astrix-scanner-upload">
+          <Upload size={20} aria-hidden="true" /> Upload barcode photo
+        </button>
+        <p className="astrix-scanner-privacy"><ShieldCheck size={15} aria-hidden="true" /> Scanned on your phone. Nothing is uploaded.</p>
         </div>
-      </div>
 
-      {/* Footer */}
-      <div className="pt-3 border-t border-slate-100 text-center">
-        <p className="text-xs text-slate-500">
-          Already have an account?{' '}
-          <Link href="/login" className="text-sky-600 font-bold hover:underline">
-            Sign In
-          </Link>
-        </p>
-      </div>
+        <p className="astrix-scanner-footer">Already registered? <Link href="/login">Sign in</Link></p>
+      </main>
     </div>
   );
 }

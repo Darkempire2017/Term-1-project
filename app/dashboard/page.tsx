@@ -9,7 +9,6 @@ import {
   Unlock,
   CheckCircle2,
   Clock,
-  RefreshCw,
   Check,
   Wrench,
   AlertCircle,
@@ -19,6 +18,7 @@ import { BottomNav } from '@/components/BottomNav';
 import type { MeResponse, PublicSlot } from '@/lib/types';
 import { useViewMode } from '@/components/ViewModeContext';
 import { formatStationDueTime } from '@/lib/time';
+import './dashboard.css';
 
 // The lock takes ~4 s to open (message delivery + 2.7 s servo turn); the countdown
 // starts after that. Then the cabinet gives the student 5 checks × ~2.5 s with the
@@ -509,8 +509,26 @@ export default function DashboardPage() {
     }
   };
 
+  const slotTiles = slots.map((s) => {
+    const isMine = actionInProgress === 'borrow' && pendingSlot === s.slot;
+    const isSelected = activeLoan?.slot === s.slot || (actionInProgress === 'borrow' ? isMine : nextAvailableSlot?.slot === s.slot);
+    return (
+      <div
+        key={s.slot}
+        className={`astrix-slot ${s.availability ? 'ready' : 'out'} ${isSelected ? 'selected' : ''}`}
+        aria-label={`Slot ${s.slot}: ${isMine ? 'assigned to you' : activeLoan?.slot === s.slot ? 'your loan' : s.availability ? 'ready' : 'out'}`}
+      >
+        <span className="astrix-slot-number">#{s.slot}</span>
+        <span className="astrix-slot-icon"><Umbrella aria-hidden="true" /></span>
+        <span className="astrix-slot-state">
+          {isMine || activeLoan?.slot === s.slot ? 'Yours' : s.availability ? 'Ready' : 'Out'}
+        </span>
+      </div>
+    );
+  });
+
   return (
-    <div className="flex-1 flex flex-col justify-between bg-slate-50 select-none overflow-y-auto relative">
+    <div className="astrix-dashboard flex-1 flex flex-col bg-white select-none overflow-y-auto relative">
       {/* ============================================================================== */}
       {/* DYNAMIC SCREEN GLOW AURA (Green on Borrow, Blue on Return, Red on Error)       */}
       {/* ============================================================================== */}
@@ -565,45 +583,32 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Top Header & Station Info */}
-      <div className="p-5 space-y-3">
-        {/* Top Badges & Dev State Switcher */}
-        <div className="flex items-center justify-end">
-          {/* Interactive State Toggle (Visible in Dev Mode) */}
+      <header className="astrix-masthead">
+        <div className="astrix-masthead-inner">
+          <div className="astrix-topline">
+            <svg className="astrix-umbrella-mark" viewBox="0 0 300 220" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+              <g stroke="currentColor" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M75 130c5-42 42-70 86-79 51-11 98 3 117 35" />
+                <path d="M75 130c15-14 31-18 51-11 17-14 34-17 51-10 15-15 31-19 50-12 14-16 32-19 51-11" />
+                <path d="M161 51c-17 17-27 40-35 68M161 51c26 10 49 26 66 46" />
+                <path d="m155 27 6 24 31 130c4 19 31 26 34 7" />
+              </g>
+            </svg>
+          </div>
+          <h1>Smart Umbrella<br />Station</h1>
+          <p>Welcome back, <strong>{currentUserName || 'Student'}</strong></p>
+          {isAdmin && (
+            <Link href="/admin" className="astrix-admin-link">Open admin panel</Link>
+          )}
           {!isStudentMode && (
-            <button
-              type="button"
-              onClick={toggleDemoState}
-              className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-slate-200/80 hover:bg-sky-100 text-slate-700 hover:text-sky-700 transition border border-slate-300/60"
-              title="Toggle between State A and State B"
-            >
+            <button type="button" onClick={toggleDemoState} className="astrix-demo-toggle">
               Switch to {activeLoan ? 'State A' : 'State B'}
             </button>
           )}
         </div>
+      </header>
 
-        {/* User Welcome */}
-        <div className="flex items-center justify-between pt-1">
-          <div>
-            <h1 className="text-xl font-black text-slate-900 tracking-tight">Smart Umbrella Station</h1>
-            <p className="text-xs text-slate-500">
-              Welcome, <span className="font-bold text-slate-700">{currentUserName}</span>
-            </p>
-            {isAdmin && (
-              <Link href="/admin" className="inline-block mt-1 text-[11px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-lg hover:bg-purple-100">
-                Open admin panel
-              </Link>
-            )}
-          </div>
-          <button
-            onClick={refreshStationData}
-            className="p-2 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-sky-600 shadow-sm transition active:scale-95"
-            title="Refresh status"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-
+      <main className="astrix-sheet space-y-4" aria-busy={loading}>
         {/* Cabinet Offline Banner */}
         {cabinetOffline && (
           <div className="p-3.5 rounded-2xl text-xs bg-slate-800 text-white border border-slate-700 shadow-sm" role="status">
@@ -881,122 +886,68 @@ export default function DashboardPage() {
             )}
 
             {/* State Banner */}
-            <div className="bg-gradient-to-br from-sky-600 to-sky-700 text-white p-5 rounded-3xl shadow-lg shadow-sky-600/20 space-y-3 relative overflow-hidden">
+            <section className="astrix-availability-card" aria-label="Umbrella availability">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-1 rounded-full bg-white/20 text-white backdrop-blur-sm">
-                  Ready to borrow
+                <span className="astrix-status-pill">
+                  {nextAvailableSlot ? 'Ready to borrow' : 'All umbrellas out'}
                 </span>
-                <span className="text-xs text-sky-100 font-mono">
-                  {availableSlotsList.length} of 4 Available
+                <span className="astrix-availability-count">
+                  {availableSlotsList.length} of {slots.length || 4} available
                 </span>
               </div>
 
               {/* Ready Slot Display */}
-              <div className="space-y-1">
-                <p className="text-xs text-sky-100 font-medium">Next Ready Umbrella</p>
-                <div className="flex items-baseline space-x-2">
-                  <span className="text-2xl font-black tracking-tight">Available slot:</span>
-                  <span className="text-3xl font-black text-amber-300 font-mono">
-                    {nextAvailableSlot ? `Slot ${nextAvailableSlot.slot}` : 'None'}
-                  </span>
-                </div>
-              </div>
-
-              <p className="text-xs text-sky-100/90 leading-relaxed">
-                {nextAvailableSlot
-                  ? `Umbrella tag (${nextAvailableSlot.umbrella_id}) is docked. Tap "Borrow" below to open the lock.`
-                  : 'All umbrellas are currently in use. Please check back soon.'}
+              <p className="astrix-card-overline">Next ready umbrella</p>
+              <p className="astrix-slot-callout">
+                {nextAvailableSlot ? 'Available at ' : ''}
+                <strong>{nextAvailableSlot ? `Slot ${nextAvailableSlot.slot}` : 'No slot available'}</strong>
               </p>
-            </div>
+
+              <p className="astrix-card-detail">
+                {nextAvailableSlot
+                  ? 'An umbrella is docked and ready. Tap Borrow to open the lock.'
+                  : 'All umbrellas are currently in use. Please check back soon.'}
+                {nextAvailableSlot && <span className="astrix-tag-detail">Umbrella tag: {nextAvailableSlot.umbrella_id}</span>}
+              </p>
+            </section>
 
             {/* 4-Slot Visual Matrix */}
-            <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-sm space-y-2.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                Physical Slots (1 - 4)
-              </span>
+            <section className="astrix-slots-section" aria-label="Physical umbrella slots">
+              <h2 className="astrix-section-label">Physical slots (1–4)</h2>
 
-              <div className="grid grid-cols-4 gap-2">
-                {slots.map((s) => {
-                  // While borrowing, highlight the slot the server gave this student
-                  const isMine = actionInProgress === 'borrow' && pendingSlot === s.slot;
-                  const isReady = actionInProgress === 'borrow' ? isMine : nextAvailableSlot?.slot === s.slot;
-                  return (
-                    <div
-                      key={s.slot}
-                      className={`p-2.5 rounded-2xl text-center border transition flex flex-col items-center justify-between space-y-1 ${
-                        isReady
-                          ? 'bg-amber-50 border-amber-300 shadow-sm ring-2 ring-amber-400/30'
-                          : s.availability
-                          ? 'bg-emerald-50/60 border-emerald-200'
-                          : 'bg-slate-50 border-slate-200 text-slate-400'
-                      }`}
-                    >
-                      <span className="text-[10px] font-bold text-slate-500 font-mono">
-                        #{s.slot}
-                      </span>
-                      <div
-                        className={`w-8 h-8 rounded-xl flex items-center justify-center ${
-                          s.availability ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-400'
-                        }`}
-                      >
-                        <Umbrella className="w-4 h-4" />
-                      </div>
-                      <span
-                        className={`text-[9px] font-bold uppercase tracking-tight ${
-                          s.availability ? 'text-emerald-700' : 'text-slate-400'
-                        }`}
-                      >
-                        {isMine ? 'Yours' : s.availability ? 'Ready' : 'Out'}
-                      </span>
-                    </div>
-                  );
-                })}
+              <div className="astrix-slots-grid">
+                {slotTiles}
               </div>
-            </div>
+            </section>
           </div>
         ) : (
           /* ============================================================================ */
           /* STATE B: "WHEN RETURNING" (User has an active loan)                           */
           /* ============================================================================ */
           <div className="space-y-4">
-            {/* Loan card: which umbrella they have, where it goes back and by when */}
-            <div
-              className={`bg-gradient-to-br text-white p-5 rounded-3xl shadow-lg space-y-3 relative overflow-hidden ${
-                loanOverdue ? 'from-rose-500 to-rose-600 shadow-rose-500/20' : 'from-amber-500 to-amber-600 shadow-amber-500/20'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-1 rounded-full bg-white/20 text-white backdrop-blur-sm">
-                  Your loan
-                </span>
-                <span className="text-xs text-white/85 font-mono flex items-center space-x-1">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>{loanOverdue ? 'Overdue — please return' : '24h loan'}</span>
+            <section className={`astrix-availability-card ${loanOverdue ? 'astrix-overdue-card' : ''}`} aria-label="Your active umbrella loan">
+              <div className="flex items-center justify-between gap-2">
+                <span className="astrix-status-pill">Umbrella on loan</span>
+                <span className="astrix-availability-count flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+                  {loanOverdue ? 'Overdue' : 'Within 24 hours'}
                 </span>
               </div>
-
-              <div className="space-y-0.5">
-                <p className="text-3xl font-black tracking-tight">Umbrella {activeLoan.slot ?? '?'}</p>
-                <p className="text-sm font-bold text-white/90">Return it to Slot {activeLoan.slot ?? '?'}</p>
+              <p className="astrix-card-overline">Your borrowed umbrella</p>
+              <p className="astrix-slot-callout">Return to <strong>Slot {activeLoan.slot ?? '?'}</strong></p>
+              <div className="astrix-loan-timing">
+                <div><span>Due back</span><strong>{formatStationDueTime(activeLoan.due_time)}</strong></div>
+                <div><span>{loanTime?.overdue ? 'Overdue by' : 'Time left'}</span><strong>{loanTime?.text}</strong></div>
               </div>
-
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="p-3 rounded-2xl bg-black/15">
-                  <p className="text-white/75">Due back</p>
-                  <p className="text-sm font-black">{formatStationDueTime(activeLoan.due_time)}</p>
-                </div>
-                <div className="p-3 rounded-2xl bg-black/15">
-                  <p className="text-white/75">{loanTime?.overdue ? 'Overdue by' : 'Time left'}</p>
-                  <p className="text-sm font-black">{loanTime?.text}</p>
-                </div>
-              </div>
-
-              <p className="text-xs text-white/85 leading-relaxed">
-                Borrowed {getElapsedDuration(activeLoan.borrowed_time)}. At the station, tap &quot;Return&quot; below and put
-                the umbrella back in Slot {activeLoan.slot ?? '?'}.
+              <p className="astrix-card-detail">
+                Borrowed {getElapsedDuration(activeLoan.borrowed_time)}. At the station, tap Return and put the umbrella back in Slot {activeLoan.slot ?? '?'}.
+                <span className="astrix-tag-detail">Umbrella tag: {activeLoan.umbrella_id}</span>
               </p>
-              <p className="text-[10px] text-white/60 font-mono">Tag {activeLoan.umbrella_id}</p>
-            </div>
+            </section>
+            <section className="astrix-slots-section" aria-label="Physical umbrella slots">
+              <h2 className="astrix-section-label">Physical slots (1–4)</h2>
+              <div className="astrix-slots-grid">{slotTiles}</div>
+            </section>
           </div>
         )}
 
@@ -1004,19 +955,13 @@ export default function DashboardPage() {
         {/* CORE DUAL BUTTONS (Standard Student Borrow vs Return Matrix)                   */}
         {/* ============================================================================== */}
         {!isDevAccount && (
-          <div className="pt-2 space-y-2.5">
+          <div className="astrix-actions">
             {/* 1. Borrow Button */}
             <button
               type="button"
               onClick={() => handleBorrow()}
               disabled={Boolean(activeLoan) || !nextAvailableSlot || actionInProgress !== null || unlockCountdown !== null || cabinetOffline}
-              className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
-                unlockCountdown !== null
-                  ? 'bg-amber-500 text-white shadow-amber-500/30 animate-pulse cursor-wait'
-                  : !activeLoan && nextAvailableSlot && !cabinetOffline
-                  ? 'bg-sky-600 hover:bg-sky-700 text-white shadow-sky-600/30 active:scale-[0.99] cursor-pointer'
-                  : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
-              }`}
+              className={`astrix-action astrix-action-primary ${unlockCountdown !== null ? 'astrix-action-waiting' : ''}`}
             >
               {unlockCountdown !== null ? (
                 <>
@@ -1043,11 +988,7 @@ export default function DashboardPage() {
               type="button"
               onClick={handleReturn}
               disabled={!activeLoan || actionInProgress !== null || cabinetOffline}
-              className={`w-full py-4 px-4 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 transition shadow-md ${
-                activeLoan && !cabinetOffline
-                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30 active:scale-[0.99] cursor-pointer'
-                  : 'bg-slate-200 text-slate-400 shadow-none cursor-not-allowed border border-slate-300/40'
-              }`}
+              className="astrix-action astrix-action-secondary"
             >
               {actionInProgress === 'return' ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1065,7 +1006,7 @@ export default function DashboardPage() {
             </button>
           </div>
         )}
-      </div>
+      </main>
 
       {/* Persistent Bottom Nav */}
       <BottomNav />

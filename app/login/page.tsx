@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Lock, User, ArrowRight, Eye, EyeOff, AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { useViewMode } from '@/components/ViewModeContext';
 import { StormHeader, CloudMark } from '@/components/Storm';
+import { seedStationUser } from '@/lib/stationCache';
 
 function LoginForm() {
   const router = useRouter();
@@ -122,6 +123,7 @@ function LoginForm() {
 
       // The server set a signed session cookie; this copy is only for showing the name
       localStorage.setItem('astrix_user', JSON.stringify(activeUser));
+      seedStationUser(activeUser);
 
       setSuccess(`Welcome back, ${activeUser.username}!`);
       setTimeout(() => {

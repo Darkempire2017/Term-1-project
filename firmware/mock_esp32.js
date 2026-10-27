@@ -125,7 +125,7 @@ function simulateBorrowFail(slot = currentSlot) {
     slot: slot,
     status: 'FAIL',
     reason: 'NOT_TAKEN',
-    message: `Umbrella was NOT taken from Slot ${slot} after 5 checks. Closing the lock.`,
+    message: `Umbrella was NOT taken from Slot ${slot} after 7 checks. The lock is closed.`,
   };
 
   client.publish(TOPIC_RESPONSE, JSON.stringify(payload), { qos: 0 });
@@ -158,7 +158,7 @@ function simulateReturnFailNoUmbrella(slot = currentSlot) {
     slot: slot,
     status: 'FAIL',
     reason: 'NO_UMBRELLA',
-    message: `No umbrella returned to Slot ${slot} after 5 checks. Closing the lock.`,
+    message: `No umbrella returned to Slot ${slot} after 7 checks. The lock is closed.`,
   };
 
   client.publish(TOPIC_RESPONSE, JSON.stringify(payload), { qos: 0 });

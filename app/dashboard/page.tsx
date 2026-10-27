@@ -18,9 +18,11 @@ import {
 import { BottomNav } from '@/components/BottomNav';
 import type { MeResponse, PublicSlot } from '@/lib/types';
 import { useViewMode } from '@/components/ViewModeContext';
+import { formatStationDueTime } from '@/lib/time';
 
 // The lock takes ~4 s to open (message delivery + 2.7 s servo turn); the countdown
-// starts after that. Then the cabinet gives the student 5 checks × ~2.5 s.
+// starts after that. Then the cabinet gives the student 5 checks × ~2.5 s with the
+// lock open, and checks twice more while it closes.
 const OPENING_MS = 4000;
 const TAKE_WINDOW_SECONDS = 12;
 
@@ -28,6 +30,83 @@ interface AssignedSlot {
   slot: number;
   umbrella_number: number;
   umbrella_id: string;
+}
+
+interface CabinetReply {
+  success?: boolean;
+  message?: string;
+  reason?: string;
+  slot?: number;
+  due_time?: string;
+  duration?: string;
+}
+
+// Big result card shown after a borrow (green), a return (blue) or an error (red)
+interface ActionResult {
+  tone: 'borrowed' | 'returned' | 'error';
+  title: string;
+  detail: string;
+}
+
+/**
+ * What happened and what to do next, from the server's answer
+ */
+function describeResult(kind: 'borrow' | 'return', reply: CabinetReply): ActionResult {
+  const slot = reply.slot;
+
+  if (reply.success) {
+    if (kind === 'borrow') {
+      return {
+        tone: 'borrowed',
+        title: `Umbrella ${slot} borrowed`,
+        detail: reply.due_time
+          ? `Return it to Slot ${slot} by ${formatStationDueTime(reply.due_time)}.`
+          : `Return it to Slot ${slot} within 24 hours.`,
+      };
+    }
+    return {
+      tone: 'returned',
+      title: 'Returned — your loan is closed',
+      detail: `Umbrella ${slot} is back in Slot ${slot}.${reply.duration ? ` You had it for ${reply.duration}.` : ''} Thank you!`,
+    };
+  }
+
+  if (reply.reason === 'NOT_TAKEN') {
+    return {
+      tone: 'error',
+      title: 'Umbrella not taken',
+      detail: `Slot ${slot} locked again and no loan was recorded. Tap Borrow to try again, and take the umbrella while the lock is open.`,
+    };
+  }
+  if (reply.reason === 'NO_UMBRELLA') {
+    return {
+      tone: 'error',
+      title: 'Umbrella not detected',
+      detail: `Slot ${slot} locked again and your loan is still open. Tap Return, then push the umbrella all the way into Slot ${slot}.`,
+    };
+  }
+  if (reply.reason === 'WRONG_UMBRELLA') {
+    return {
+      tone: 'error',
+      title: `Wrong umbrella in Slot ${slot}`,
+      detail: `That isn't Umbrella ${slot}. The slot is left unlocked: take that umbrella out, then tap Return again with your own umbrella.`,
+    };
+  }
+  return {
+    tone: 'error',
+    title: kind === 'borrow' ? 'Borrow failed' : 'Return failed',
+    detail: reply.message || 'The request failed. Please try again.',
+  };
+}
+
+/**
+ * Time left on a loan, or how long it is overdue, e.g. "23h 12m"
+ */
+function loanTimeLeft(dueIso: string): { overdue: boolean; text: string } {
+  const diffMs = new Date(dueIso).getTime() - Date.now();
+  const mins = Math.floor(Math.abs(diffMs) / 60000);
+  const text = mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  return { overdue: diffMs < 0, text };
 }
 
 /**
@@ -38,7 +117,7 @@ interface AssignedSlot {
 async function readCabinetResponse(
   res: Response,
   onAssigned: (assigned: AssignedSlot) => void
-): Promise<{ success?: boolean; message?: string; reason?: string; slot?: number }> {
+): Promise<CabinetReply> {
   const contentType = res.headers.get('content-type') || '';
   if (!contentType.includes('application/x-ndjson') || !res.body) {
     return res.json();
@@ -96,13 +175,16 @@ export default function DashboardPage() {
     umbrella_id: string;
     slot: number | null;
     borrowed_time: string;
+    due_time: string;
     is_overdue?: boolean;
   } | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<'borrow' | 'return' | null>(null);
   const [unlockCountdown, setUnlockCountdown] = useState<number | null>(null);
+  const [lockClosing, setLockClosing] = useState(false); // take window over, the cabinet is closing the lock
   const [pendingSlot, setPendingSlot] = useState<number | null>(null);
+  const [result, setResult] = useState<ActionResult | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const openingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [notification, setNotification] = useState<{
@@ -124,6 +206,12 @@ export default function DashboardPage() {
 
   const dismissNotification = useCallback(() => {
     setNotification(null);
+    if (screenGlow === 'red') setScreenGlow(null);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+  }, [screenGlow]);
+
+  const dismissResult = useCallback(() => {
+    setResult(null);
     if (screenGlow === 'red') setScreenGlow(null);
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
   }, [screenGlow]);
@@ -194,12 +282,16 @@ export default function DashboardPage() {
   const availableSlotsList = slots.filter((s) => s.availability);
   const nextAvailableSlot = availableSlotsList.length > 0 ? availableSlotsList[0] : null;
 
-  // Format elapsed time for State B ("Since when")
+  // Time left on the student's loan (refreshed with the station data every 5 s)
+  const loanTime = activeLoan ? loanTimeLeft(activeLoan.due_time) : null;
+  const loanOverdue = Boolean(activeLoan?.is_overdue || loanTime?.overdue);
+
+  // How long ago the loan started, e.g. "12 mins ago"
   const getElapsedDuration = (isoString?: string) => {
-    if (!isoString) return 'Just now';
+    if (!isoString) return 'just now';
     const diffMs = Date.now() - new Date(isoString).getTime();
     const mins = Math.floor(diffMs / 60000);
-    if (mins < 1) return 'Just now';
+    if (mins < 1) return 'just now';
     if (mins < 60) return `${mins} min${mins === 1 ? '' : 's'} ago`;
     const hours = Math.floor(mins / 60);
     const remMins = mins % 60;
@@ -213,8 +305,12 @@ export default function DashboardPage() {
       setUnlockCountdown(remaining);
       countdownRef.current = setInterval(() => {
         remaining -= 1;
-        if (remaining > 0) setUnlockCountdown(remaining);
-        else stopCountdown();
+        if (remaining > 0) {
+          setUnlockCountdown(remaining);
+        } else {
+          stopCountdown();
+          setLockClosing(true);
+        }
       }, 1000);
     }, OPENING_MS);
   };
@@ -229,6 +325,8 @@ export default function DashboardPage() {
     body: Record<string, unknown>
   ) => {
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    setResult(null);
+    setLockClosing(false);
     setActionInProgress(kind);
     setScreenGlow(kind === 'borrow' ? 'green' : 'blue');
     setPendingSlot(kind === 'borrow' ? null : slotHint);
@@ -255,24 +353,21 @@ export default function DashboardPage() {
         startTakeCountdown();
       });
 
-      if (json.success) {
-        setScreenGlow(null);
-        setNotification({ type: 'success', text: `✅ ${json.message}` });
-      } else if (json.reason === 'WRONG_UMBRELLA') {
-        triggerErrorGlow();
-        setNotification({
-          type: 'error',
-          text: `❌ Wrong umbrella in Slot #${json.slot}. The slot is left unlocked — take it out and return your own umbrella.`,
-        });
-      } else {
-        triggerErrorGlow();
-        setNotification({ type: 'error', text: `⚠️ ${json.message || 'The request failed. Please try again.'}` });
-      }
+      if (json.success) setScreenGlow(null);
+      else triggerErrorGlow();
+      setNotification(null);
+      setResult(describeResult(kind, json));
     } catch {
       triggerErrorGlow();
-      setNotification({ type: 'error', text: 'Could not connect to the station. Please check your connection.' });
+      setNotification(null);
+      setResult({
+        tone: 'error',
+        title: 'Could not reach the station',
+        detail: 'Please check your connection and try again.',
+      });
     } finally {
       stopCountdown();
+      setLockClosing(false);
       setPendingSlot(null);
       setActionInProgress(null);
       refreshStationData();
@@ -377,7 +472,11 @@ export default function DashboardPage() {
   const handleBorrow = async () => {
     if (!nextAvailableSlot) {
       triggerErrorGlow();
-      setNotification({ type: 'error', text: 'No umbrellas currently available at this station.' });
+      setResult({
+        tone: 'error',
+        title: 'No umbrellas available',
+        detail: 'All umbrellas are in use right now. Please check back soon.',
+      });
       return;
     }
     await runCabinetAction('borrow', nextAvailableSlot.slot, {});
@@ -399,10 +498,12 @@ export default function DashboardPage() {
       // Switch to State B
       const slot1 = slots[0];
       if (!slot1) return;
+      const borrowedAt = Date.now() - 24 * 60 * 1000; // 24 mins ago
       setActiveLoan({
         umbrella_id: slot1.umbrella_id,
         slot: slot1.slot,
-        borrowed_time: new Date(Date.now() - 24 * 60 * 1000).toISOString(), // 24 mins ago
+        borrowed_time: new Date(borrowedAt).toISOString(),
+        due_time: new Date(borrowedAt + 24 * 60 * 60 * 1000).toISOString(),
       });
       setNotification({ type: 'info', text: 'Switched to State B (Returning View).' });
     }
@@ -508,6 +609,38 @@ export default function DashboardPage() {
           <div className="p-3.5 rounded-2xl text-xs bg-slate-800 text-white border border-slate-700 shadow-sm" role="status">
             <p className="font-bold">The umbrella cabinet is offline</p>
             <p className="text-slate-300 mt-0.5">Borrowing and returning are paused until it reconnects. This page updates by itself.</p>
+          </div>
+        )}
+
+        {/* Result of the last borrow/return: green = borrowed, blue = returned, red = error */}
+        {result && (
+          <div
+            role="status"
+            aria-live="polite"
+            className={`p-5 rounded-3xl text-white shadow-lg space-y-4 bg-gradient-to-br animate-in fade-in slide-in-from-top-1 ${
+              result.tone === 'borrowed'
+                ? 'from-emerald-500 to-emerald-600 shadow-emerald-500/30'
+                : result.tone === 'returned'
+                ? 'from-sky-500 to-sky-600 shadow-sky-500/30'
+                : 'from-rose-500 to-rose-600 shadow-rose-500/30'
+            }`}
+          >
+            <div className="flex items-start space-x-3">
+              <div className="w-11 h-11 rounded-2xl bg-white/20 flex items-center justify-center shrink-0">
+                {result.tone === 'error' ? <AlertCircle className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
+              </div>
+              <div className="space-y-1">
+                <p className="text-xl font-black leading-tight">{result.title}</p>
+                <p className="text-sm leading-relaxed text-white/90">{result.detail}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={dismissResult}
+              className="w-full py-2.5 rounded-xl bg-white/20 hover:bg-white/30 text-sm font-bold transition"
+            >
+              OK
+            </button>
           </div>
         )}
 
@@ -734,7 +867,11 @@ export default function DashboardPage() {
                       Take Umbrella {pendingSlot}, only from this slot
                     </p>
                     <p className="text-xs text-slate-500">
-                      {unlockCountdown !== null ? `${unlockCountdown}s left to take it` : 'The lock is opening…'}
+                      {unlockCountdown !== null
+                        ? `${unlockCountdown}s left to take it`
+                        : lockClosing
+                        ? 'The lock is closing. Checking whether you took it…'
+                        : 'The lock is opening…'}
                     </p>
                   </>
                 ) : (
@@ -747,7 +884,7 @@ export default function DashboardPage() {
             <div className="bg-gradient-to-br from-sky-600 to-sky-700 text-white p-5 rounded-3xl shadow-lg shadow-sky-600/20 space-y-3 relative overflow-hidden">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-1 rounded-full bg-white/20 text-white backdrop-blur-sm">
-                  State A: Ready to Borrow
+                  Ready to borrow
                 </span>
                 <span className="text-xs text-sky-100 font-mono">
                   {availableSlotsList.length} of 4 Available
@@ -822,37 +959,43 @@ export default function DashboardPage() {
           /* STATE B: "WHEN RETURNING" (User has an active loan)                           */
           /* ============================================================================ */
           <div className="space-y-4">
-            {/* State Banner */}
-            <div className="bg-gradient-to-br from-amber-500 to-amber-600 text-white p-5 rounded-3xl shadow-lg shadow-amber-500/20 space-y-3 relative overflow-hidden">
+            {/* Loan card: which umbrella they have, where it goes back and by when */}
+            <div
+              className={`bg-gradient-to-br text-white p-5 rounded-3xl shadow-lg space-y-3 relative overflow-hidden ${
+                loanOverdue ? 'from-rose-500 to-rose-600 shadow-rose-500/20' : 'from-amber-500 to-amber-600 shadow-amber-500/20'
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-1 rounded-full bg-white/20 text-white backdrop-blur-sm">
-                  State B: Active Loan
+                  Your loan
                 </span>
-                <span className="text-xs text-amber-100 font-mono flex items-center space-x-1">
+                <span className="text-xs text-white/85 font-mono flex items-center space-x-1">
                   <Clock className="w-3.5 h-3.5" />
-                  <span>{activeLoan.is_overdue ? 'Overdue — please return' : '24h Due Window'}</span>
+                  <span>{loanOverdue ? 'Overdue — please return' : '24h loan'}</span>
                 </span>
               </div>
 
-              {/* Borrowed Umbrella ID */}
-              <div className="space-y-1">
-                <p className="text-xs text-amber-100 font-medium">Borrowed Umbrella ID</p>
-                <div className="text-2xl font-black font-mono tracking-wider">
-                  {activeLoan.umbrella_id}
+              <div className="space-y-0.5">
+                <p className="text-3xl font-black tracking-tight">Umbrella {activeLoan.slot ?? '?'}</p>
+                <p className="text-sm font-bold text-white/90">Return it to Slot {activeLoan.slot ?? '?'}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="p-3 rounded-2xl bg-black/15">
+                  <p className="text-white/75">Due back</p>
+                  <p className="text-sm font-black">{formatStationDueTime(activeLoan.due_time)}</p>
+                </div>
+                <div className="p-3 rounded-2xl bg-black/15">
+                  <p className="text-white/75">{loanTime?.overdue ? 'Overdue by' : 'Time left'}</p>
+                  <p className="text-sm font-black">{loanTime?.text}</p>
                 </div>
               </div>
 
-              {/* Since When Elapsed Timer */}
-              <div className="p-3 rounded-2xl bg-black/15 backdrop-blur-sm flex items-center justify-between text-xs">
-                <span className="text-amber-100">Since when:</span>
-                <span className="font-bold text-white font-mono bg-white/20 px-2.5 py-0.5 rounded-lg">
-                  {getElapsedDuration(activeLoan.borrowed_time)}
-                </span>
-              </div>
-
-              <p className="text-xs text-amber-100/90 leading-relaxed">
-                You have an active umbrella loan. Return it to Slot #{activeLoan.slot ?? '?'} by tapping &quot;Return&quot; below. Each umbrella goes back to its own slot.
+              <p className="text-xs text-white/85 leading-relaxed">
+                Borrowed {getElapsedDuration(activeLoan.borrowed_time)}. At the station, tap &quot;Return&quot; below and put
+                the umbrella back in Slot {activeLoan.slot ?? '?'}.
               </p>
+              <p className="text-[10px] text-white/60 font-mono">Tag {activeLoan.umbrella_id}</p>
             </div>
           </div>
         )}
@@ -911,7 +1054,7 @@ export default function DashboardPage() {
               ) : activeLoan ? (
                 <>
                   <Check className="w-4 h-4" />
-                  <span>Return Umbrella ({activeLoan.umbrella_id})</span>
+                  <span>Return Umbrella {activeLoan.slot ?? ''}</span>
                 </>
               ) : (
                 <>

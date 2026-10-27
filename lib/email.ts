@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
+import { formatStationDateTime } from './time';
 
 const gmailUser = process.env.GMAIL_USER;
 const gmailPass = process.env.GMAIL_APP_PASSWORD;
@@ -213,19 +214,18 @@ export async function sendBorrowReceiptEmail(
   studentName: string,
   slot: number,
   umbrellaId: string,
+  borrowedTime: Date,
   dueTime: Date
 ): Promise<{ success: boolean; id?: string; error?: string }> {
-  const formattedDue = dueTime.toLocaleString('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  const formattedBorrowed = formatStationDateTime(borrowedTime);
+  const formattedDue = formatStationDateTime(dueTime);
 
   console.log(`\n======================================================`);
   console.log(`☂️ [RECEIPT DISPATCH] Borrow Confirmation for ${toEmail}:`);
   console.log(`👤 Student: ${studentName}`);
   studentName = escapeHtml(studentName);
   console.log(`📍 Slot: #${slot} | Tag UID: ${umbrellaId}`);
-  console.log(`⏰ Due By: ${formattedDue}`);
+  console.log(`⏰ Borrowed: ${formattedBorrowed} | Due By: ${formattedDue}`);
   console.log(`======================================================\n`);
 
   const html = `
@@ -242,13 +242,17 @@ export async function sendBorrowReceiptEmail(
           <span style="color: #64748b;">Umbrella Tag UID:</span>
           <code style="background-color: #e2e8f0; padding: 2px 6px; border-radius: 6px; color: #0f172a;">${umbrellaId}</code>
         </div>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 13px;">
+          <span style="color: #64748b;">Borrowed At:</span>
+          <strong style="color: #0f172a;">${formattedBorrowed}</strong>
+        </div>
         <div style="display: flex; justify-content: space-between; font-size: 13px;">
           <span style="color: #64748b;">Return Due By:</span>
           <strong style="color: #d97706;">${formattedDue} (24h window)</strong>
         </div>
       </div>
 
-      <p style="color: #64748b; font-size: 13px;">Please return the umbrella to any free station slot after use to keep equipment available for fellow students.</p>
+      <p style="color: #64748b; font-size: 13px;">Please return the umbrella to Slot #${slot}, the slot it came from, so it stays available for fellow students.</p>
       
       <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
       <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">

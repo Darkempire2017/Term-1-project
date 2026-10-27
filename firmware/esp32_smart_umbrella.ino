@@ -13,7 +13,10 @@
  *   - 4x push buttons      GPIO 1, 2, 8, 9    (pressed while an umbrella is docked)
  *   - 4x RC522 RFID        SDA/SS 15, 16, 17, 18
  *                          shared SCK 11, MOSI 12, MISO 13, RST 14
+ *   - 4x WS2812B strips    GPIO 39, 40, 41, 42 (6 LEDs each, one per slot)
+ *                          green = borrow, blue = return, red = error
  *   Power the servos from a separate 5 V supply (shared GND): up to 4 can move at once.
+ *   Power the LED strips from 5 V too (up to ~1.5 A at full white), shared GND.
  *
  * MQTT:
  *   - Subscribe: astrix-umbrella/cabinet/command   {"action":"BORROW"|"RETURN","slot":1-4}
@@ -22,7 +25,8 @@
  *   - Publish:   astrix-umbrella/cabinet/ack       ("got it" the moment a command arrives)
  *   - Publish:   astrix-umbrella/cabinet/status    (retained online/offline; offline is the MQTT last will)
  *
- * Libraries: PubSubClient (Nick O'Leary), ArduinoJson 7, MFRC522 (GithubCommunity)
+ * Libraries: PubSubClient (Nick O'Leary), ArduinoJson 7, MFRC522 (GithubCommunity),
+ *            Adafruit NeoPixel
  *
  * Note: servos are driven with raw LEDC on explicit channels. ESP32Servo assigns
  * channels 8 and 9 to the 3rd and 4th servo on the ESP32-S3 (which only has 0-7),
@@ -37,6 +41,7 @@
 #include <ArduinoJson.h>
 #include <SPI.h>
 #include <MFRC522.h>
+#include <Adafruit_NeoPixel.h>
 #include <esp_arduino_version.h>
 
 // ===== WiFi - type your WiFi name and password between the quotes =====
@@ -97,6 +102,18 @@ MFRC522 readers[NUM_SLOTS] = {
   MFRC522(RFID_SS_PINS[3], MFRC522::UNUSED_PIN)
 };
 
+// LED strips (WS2812B), one per slot: Slot 1 -> GPIO 39 ... Slot 4 -> GPIO 42
+const int LED_PINS[NUM_SLOTS] = { 39, 40, 41, 42 };
+const int LEDS_PER_STRIP      = 6;
+const uint8_t LED_BRIGHTNESS  = 120; // 0-255; lower = less glare and current
+
+Adafruit_NeoPixel strips[NUM_SLOTS] = {
+  Adafruit_NeoPixel(LEDS_PER_STRIP, LED_PINS[0], NEO_GRB + NEO_KHZ800),
+  Adafruit_NeoPixel(LEDS_PER_STRIP, LED_PINS[1], NEO_GRB + NEO_KHZ800),
+  Adafruit_NeoPixel(LEDS_PER_STRIP, LED_PINS[2], NEO_GRB + NEO_KHZ800),
+  Adafruit_NeoPixel(LEDS_PER_STRIP, LED_PINS[3], NEO_GRB + NEO_KHZ800)
+};
+
 // Umbrella tags (Umbrella 1 belongs in Slot 1, etc.) - must match the umbrellas table
 const char* UMBRELLA_UIDS[NUM_SLOTS] = {
   "53 01 B8 CC 33 00 01", // Umbrella 1
@@ -110,11 +127,16 @@ const int NO_TAG      = -1;
 const int UNKNOWN_TAG = -2;
 
 // Timing
-const int BORROW_CHECKS           = 5;    // how many times to check if the umbrella was taken
-const int RETURN_CHECKS           = 5;    // how many times to check if the umbrella was put back
+const int BORROW_CHECKS           = 7;    // how many times to check if the umbrella was taken
+const int RETURN_CHECKS           = 7;    // how many times to check if the umbrella was put back
+// Checks with the lock fully open. After these the lock starts closing and the rest
+// run while it closes, the last one once it is shut. The result is what is in the slot
+// when it locks, so an umbrella taken or put back at the last moment still counts.
+const int OPEN_CHECKS             = 5;
 const unsigned long holdTime      = 2000; // button must stay pressed/unpressed this long before reading the tag
 const unsigned long tagScanWindow = 500;  // keep trying to read the tag for this long
 const unsigned long stepInterval  = 15;   // ms per 1 degree of servo movement
+const unsigned long errorShowTime = 10000; // red stays on this long after NOT_TAKEN / NO_UMBRELLA
 
 // Servo positions (moved 1 degree at a time by updateServos)
 int currentPosition[NUM_SLOTS];
@@ -164,6 +186,15 @@ unsigned long unlockedSince[NUM_SLOTS];  // when each lock last opened (for the 
 const unsigned long buttonSettleTime = 500;   // button must be steady this long to count
 const unsigned long tagPollInterval  = 750;   // read one idle slot's tag every 0.75 s (each slot every ~3 s)
 const unsigned long slotsRefresh     = 60000; // resend the slot state at least once a minute
+
+// Light colour of each slot's strip, and how long it stays on (0 = until changed)
+const uint32_t LIGHT_OFF   = 0x000000;
+const uint32_t LIGHT_GREEN = 0x00FF00;
+const uint32_t LIGHT_BLUE  = 0x0000FF;
+const uint32_t LIGHT_RED   = 0xFF0000;
+uint32_t lightColor[NUM_SLOTS];
+unsigned long lightSince[NUM_SLOTS];
+unsigned long lightFor[NUM_SLOTS];
 
 // Command received over MQTT, run from loop() rather than inside the callback
 String pendingCommand = "";
@@ -219,6 +250,29 @@ bool anyServoMoving() {
     if (!servoArrived(i)) return true;
   }
   return false;
+}
+
+// ===================== LED strips =====================
+
+// Light one slot's strip in a colour; showFor > 0 turns it off after that many ms (0 = stays on)
+void setLight(int slot, uint32_t color, unsigned long showFor) {
+  lightSince[slot] = millis();
+  lightFor[slot] = showFor;
+  if (color == lightColor[slot]) return;
+  lightColor[slot] = color;
+  strips[slot].fill(color);
+  strips[slot].show();
+}
+
+// Turns off timed lights, and the wrong-umbrella red once its lock has closed
+void updateLights() {
+  unsigned long now = millis();
+  for (int s = 0; s < NUM_SLOTS; s++) {
+    if (lightColor[s] == LIGHT_OFF) continue;
+    bool timedOut = lightFor[s] > 0 && now - lightSince[s] >= lightFor[s];
+    bool wrongUmbrellaCleared = lightColor[s] == LIGHT_RED && lightFor[s] == 0 && lockClosed(s);
+    if (timedOut || wrongUmbrellaCleared) setLight(s, LIGHT_OFF, 0);
+  }
 }
 
 // ===================== RFID =====================
@@ -282,7 +336,7 @@ void finishJob(int slot, bool success) {
       snprintf(msg, sizeof(msg), "Umbrella taken from Slot %d. Closing the lock.", slot + 1);
       res = { true, "", msg };
     } else {
-      snprintf(msg, sizeof(msg), "Umbrella was NOT taken from Slot %d after %d checks. Closing the lock.",
+      snprintf(msg, sizeof(msg), "Umbrella was NOT taken from Slot %d after %d checks. The lock is closed.",
                slot + 1, BORROW_CHECKS);
       res = { false, "NOT_TAKEN", msg };
     }
@@ -296,14 +350,19 @@ void finishJob(int slot, bool success) {
     res = { false, "WRONG_UMBRELLA", msg };
     keepOpen = true;
   } else {
-    snprintf(msg, sizeof(msg), "No umbrella returned to Slot %d after %d checks. Closing the lock.",
+    snprintf(msg, sizeof(msg), "No umbrella returned to Slot %d after %d checks. The lock is closed.",
              slot + 1, RETURN_CHECKS);
     res = { false, "NO_UMBRELLA", msg };
   }
 
   Serial.println(msg);
 
+  // Success keeps green/blue until the lock closes; a failure turns the strip red.
+  // A wrong umbrella stays red while the slot is left unlocked.
+  if (!res.success) setLight(slot, LIGHT_RED, keepOpen ? 0 : errorShowTime);
+
   if (keepOpen) {
+    targetPosition[slot] = LOCK_OPEN; // reopen if it closed during the last checks
     job.phase = SLOT_IDLE;
   } else {
     targetPosition[slot] = LOCK_CLOSED;
@@ -329,11 +388,20 @@ void finishJob(int slot, bool success) {
 void nextCheck(int slot) {
   SlotJob &job = jobs[slot];
   int maxChecks = job.isBorrow ? BORROW_CHECKS : RETURN_CHECKS;
-  if (job.check < maxChecks) {
-    startCheck(slot, job.check + 1);
-  } else {
+
+  // Out of checks, or a wrong umbrella still there once the open checks are over:
+  // stop (finishJob leaves the slot open for a wrong umbrella)
+  if (job.check >= maxChecks || (job.wrongUmbrella && job.check >= OPEN_CHECKS)) {
     finishJob(slot, false);
+    return;
   }
+
+  // Open checks are over: start closing the lock and keep checking while it closes
+  if (job.check == OPEN_CHECKS) {
+    targetPosition[slot] = LOCK_CLOSED;
+    Serial.printf("  Slot %d: closing the lock, still checking...\n", slot + 1);
+  }
+  startCheck(slot, job.check + 1);
 }
 
 // Called with the tag result once a check's button window has passed
@@ -380,6 +448,14 @@ void updateJob(int slot) {
       return;
 
     case SLOT_CHECKING: {
+      // The last check starts only once the lock has stopped moving (closed)
+      int maxChecks = job.isBorrow ? BORROW_CHECKS : RETURN_CHECKS;
+      if (job.check == maxChecks && !servoArrived(slot)) {
+        job.windowStart = now;
+        job.stayed = true;
+        return;
+      }
+
       // Borrow: button must stay released (umbrella gone). Return: must stay pressed.
       int required = job.isBorrow ? HIGH : LOW;
       if (digitalRead(BUTTON_PINS[slot]) != required) job.stayed = false;
@@ -411,6 +487,7 @@ void updateJob(int slot) {
     case SLOT_LOCKING:
       if (servoArrived(slot)) {
         job.phase = SLOT_IDLE;
+        if (lightColor[slot] != LIGHT_RED) setLight(slot, LIGHT_OFF, 0);
         Serial.printf("Slot %d locked.\n", slot + 1);
         publishSlots(); // slot is no longer busy
       }
@@ -531,6 +608,7 @@ void startJob(int slot, bool isBorrow) {
   job.isBorrow = isBorrow;
   job.phase = SLOT_OPENING;
   targetPosition[slot] = LOCK_OPEN;
+  setLight(slot, isBorrow ? LIGHT_GREEN : LIGHT_BLUE, 0);
   Serial.printf("=== %s Slot %d === Unlocking...\n", isBorrow ? "Borrow from" : "Return to", slot + 1);
 }
 
@@ -701,6 +779,23 @@ void setup() {
     unlockedSince[i] = 0;
   }
 
+  // LED strips: flash green, blue, red once so the wiring can be checked, then off
+  for (int i = 0; i < NUM_SLOTS; i++) {
+    strips[i].begin();
+    strips[i].setBrightness(LED_BRIGHTNESS);
+    lightColor[i] = LIGHT_OFF;
+    lightSince[i] = 0;
+    lightFor[i] = 0;
+  }
+  const uint32_t testColors[] = { LIGHT_GREEN, LIGHT_BLUE, LIGHT_RED, LIGHT_OFF };
+  for (uint32_t color : testColors) {
+    for (int i = 0; i < NUM_SLOTS; i++) {
+      strips[i].fill(color);
+      strips[i].show();
+    }
+    delay(300);
+  }
+
   // Deselect every reader before using SPI, so they don't talk over each other
   for (int r = 0; r < NUM_SLOTS; r++) {
     pinMode(RFID_SS_PINS[r], OUTPUT);
@@ -763,6 +858,7 @@ void loop() {
     updateJob(s);
   }
   updateServos();
+  updateLights();
 
   // Report what is in each idle slot so the website stays in step
   watchIdleSlots();

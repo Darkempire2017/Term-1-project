@@ -323,6 +323,59 @@ export async function sendReturnReceiptEmail(
 }
 
 /**
+ * Dispatch overdue reminder (loan kept past its 24 h due time)
+ */
+export async function sendOverdueReminderEmail(
+  toEmail: string,
+  studentName: string,
+  slot: number | null,
+  borrowedTime: Date,
+  dueTime: Date
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  const formattedBorrowed = formatStationDateTime(borrowedTime);
+  const formattedDue = formatStationDateTime(dueTime);
+  const slotText = slot ? `Slot #${slot}` : 'its slot';
+
+  console.log(`⏰ [OVERDUE DISPATCH] Reminder for ${toEmail} (due ${formattedDue})`);
+  studentName = escapeHtml(studentName);
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 20px; background-color: #ffffff;">
+      <h2 style="color: #d97706; margin-top: 0; font-weight: 800;">⏰ Your Umbrella Is Overdue</h2>
+      <p style="color: #475569; font-size: 14px;">Hello <strong>${studentName}</strong>, the umbrella you borrowed was due back and hasn't been returned yet.</p>
+
+      <div style="background-color: #fffbeb; border: 1px solid #fde68a; border-radius: 14px; padding: 18px; margin: 20px 0;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 13px;">
+          <span style="color: #92400e;">Borrowed At:</span>
+          <strong style="color: #78350f;">${formattedBorrowed}</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 13px;">
+          <span style="color: #92400e;">Was Due By:</span>
+          <strong style="color: #b45309;">${formattedDue}</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 13px;">
+          <span style="color: #92400e;">Return To:</span>
+          <strong style="color: #78350f;">${slotText}</strong>
+        </div>
+      </div>
+
+      <p style="color: #64748b; font-size: 13px;">Please return it to ${slotText} as soon as you can so other students can use it. You can't borrow another umbrella until this one is back.</p>
+
+      <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
+      <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+        Project ASTRIX &bull; Smart Campus IoT System
+      </p>
+    </div>
+  `;
+
+  return dispatchEmail({
+    to: toEmail,
+    subject: `⏰ Please return your umbrella — it's overdue`,
+    html,
+  });
+}
+
+/**
  * Dispatch Welcome / Successful Signup confirmation email
  */
 export async function sendWelcomeSignupEmail(

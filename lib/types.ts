@@ -32,6 +32,7 @@ export interface BorrowRecord {
   due_time: string;
   returned_time: string | null;
   status: 'ACTIVE' | 'RETURNED' | 'OVERDUE';
+  reminder_sent_at?: string | null; // overdue reminder email sent
   created_at?: string;
 }
 

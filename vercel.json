@@ -13,5 +13,11 @@
         "service": "app"
       }
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/overdue",
+      "schedule": "30 2 * * *"
+    }
   ]
 }

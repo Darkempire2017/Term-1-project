@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS public.borrow_records (
     due_time TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
     returned_time TIMESTAMPTZ,
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RETURNED', 'OVERDUE')),
+    reminder_sent_at TIMESTAMPTZ,                   -- overdue reminder email sent (api/cron/overdue)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -51,6 +52,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_open_loan_per_student
     WHERE status IN ('ACTIVE', 'OVERDUE');
 
 CREATE INDEX IF NOT EXISTS idx_borrow_records_status ON public.borrow_records(status);
+
+CREATE INDEX IF NOT EXISTS borrow_records_needs_reminder
+    ON public.borrow_records (due_time)
+    WHERE status IN ('ACTIVE', 'OVERDUE') AND reminder_sent_at IS NULL;
 
 -- 4. ADMIN EVENTS (activity log + admin alerts, see docs/ADMIN_PANEL.md)
 CREATE TABLE IF NOT EXISTS public.admin_events (

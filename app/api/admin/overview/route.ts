@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { getAdminIndex } from '@/lib/admin';
 import { runAdminChecks } from '@/lib/admin-checks';
 import { getLastCabinetSnapshot } from '@/lib/cabinet-sync';
-import { getCachedCabinetOnline } from '@/lib/mqtt';
+import { getCachedCabinetOnline, getCachedCabinetWifi } from '@/lib/mqtt';
 import { OPEN_LOAN_STATUSES } from '@/lib/types';
 
 export const maxDuration = 30;
@@ -54,6 +54,7 @@ export async function GET() {
         online: getCachedCabinetOnline(),
         report_at: snapshot?.at ?? null,
         slots: snapshot?.slots ?? [],
+        wifi: getCachedCabinetWifi(),
       },
       slots: (slotsRes.data || []).map((s) => ({
         ...s,

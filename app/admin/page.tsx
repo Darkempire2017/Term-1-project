@@ -53,7 +53,12 @@ interface CabinetSlot {
 
 interface Overview {
   admin: string;
-  cabinet: { online: boolean | null; report_at: number | null; slots: CabinetSlot[] };
+  cabinet: {
+    online: boolean | null;
+    report_at: number | null;
+    slots: CabinetSlot[];
+    wifi: { current: number; networks: string[]; failed: number | null } | null;
+  };
   slots: { slot: number; umbrella_id: string; availability: boolean; borrowed_user: string | null; held: boolean }[];
   open_loans: { record_id: string; umbrella_id: string; index_no: string; borrowed_time: string; due_time: string; status: string }[];
   counts: { users: number; open_loans: number; overdue_loans: number; open_alerts: number };
@@ -359,6 +364,48 @@ export default function AdminPage() {
               <button onClick={loadOverview} className="p-2 rounded-lg hover:bg-white/60" title="Refresh now">
                 <RefreshCw className="w-4 h-4 text-slate-500" />
               </button>
+            </div>
+
+            {/* Cabinet WiFi: the network in use, and buttons to move it to another one */}
+            <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
+              <div>
+                <p className="text-sm font-black text-slate-900">Cabinet WiFi</p>
+                <p className="text-[11px] text-slate-500">
+                  {o.cabinet.wifi
+                    ? `${o.cabinet.online === false ? 'Was on' : 'On'} WiFi ${o.cabinet.wifi.current}` +
+                      (o.cabinet.wifi.networks[o.cabinet.wifi.current - 1] ? ` (${o.cabinet.wifi.networks[o.cabinet.wifi.current - 1]})` : '')
+                    : "Not reported yet. The cabinet needs the firmware with WiFi switching."}
+                </p>
+                {o.cabinet.wifi?.failed && (
+                  <p className="mt-1 text-[11px] font-semibold text-rose-700">
+                    Couldn&apos;t join WiFi {o.cabinet.wifi.failed}
+                    {o.cabinet.wifi.networks[o.cabinet.wifi.failed - 1] ? ` (${o.cabinet.wifi.networks[o.cabinet.wifi.failed - 1]})` : ''}, so it went back.
+                  </p>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {[1, 2, 3, 4].map((n) => {
+                  const name = o.cabinet.wifi?.networks[n - 1] ?? '';
+                  const inUse = o.cabinet.wifi?.current === n;
+                  return (
+                    <button
+                      key={n}
+                      onClick={() =>
+                        runAction(
+                          'cabinet.wifi',
+                          { network: n },
+                          `Switch the cabinet to WiFi ${n}${name ? ` (${name})` : ''}? It will be offline for a few seconds. If it can't join, it goes back after 20 s.`
+                        )
+                      }
+                      disabled={inUse || o.cabinet.online !== true || (o.cabinet.wifi !== null && !name) || isBusy('cabinet.wifi', { network: n })}
+                      className={`${btn} text-left ${inUse ? 'border-emerald-300 bg-emerald-50 text-emerald-800 disabled:opacity-100' : 'border-sky-300 bg-sky-50 text-sky-800'}`}
+                    >
+                      WiFi {n}{inUse ? ' · in use' : ''}
+                      <span className="block font-medium truncate">{name || (o.cabinet.wifi ? 'not set' : '')}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-2">

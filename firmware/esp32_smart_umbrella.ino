@@ -20,10 +20,11 @@
  *
  * MQTT:
  *   - Subscribe: astrix-umbrella/cabinet/command   {"action":"BORROW"|"RETURN","slot":1-4}
+ *                                                  {"action":"WIFI","slot":1-4} switches to WiFi 1-4
  *   - Publish:   astrix-umbrella/cabinet/response  (5 standard responses, QoS 0)
  *   - Publish:   astrix-umbrella/cabinet/slots     (retained: what is in each slot, lock state, so the website can sync)
  *   - Publish:   astrix-umbrella/cabinet/ack       ("got it" the moment a command arrives)
- *   - Publish:   astrix-umbrella/cabinet/status    (retained online/offline; offline is the MQTT last will)
+ *   - Publish:   astrix-umbrella/cabinet/status    (retained online/offline + WiFi in use; offline is the MQTT last will)
  *
  * Libraries: PubSubClient (Nick O'Leary), ArduinoJson 7, MFRC522 (GithubCommunity),
  *            Adafruit NeoPixel
@@ -37,6 +38,7 @@
  */
 
 #include <WiFi.h>
+#include <Preferences.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <SPI.h>
@@ -44,10 +46,24 @@
 #include <Adafruit_NeoPixel.h>
 #include <esp_arduino_version.h>
 
-// ===== WiFi - type your WiFi name and password between the quotes =====
+// ===== WiFi - the 4 networks the cabinet can use. Type each name and password between the quotes =====
+// The cabinet only changes network when an admin presses WiFi 1-4 in the admin panel.
+// If it can't join the new one within 20 s, it goes back to the one it was on.
+// It remembers the last network it joined, also after a restart.
+// Leave a line as {"", ""} if you have fewer than 4.
 // (do this in a copy outside the repo folder so the real values are never committed)
-const char* WIFI_SSID     = "";
-const char* WIFI_PASSWORD = "";
+struct WifiNetwork {
+  const char* ssid;
+  const char* password;
+};
+const int NUM_WIFI = 4;
+const WifiNetwork WIFI_NETWORKS[NUM_WIFI] = {
+  {"", ""}, // WiFi 1
+  {"", ""}, // WiFi 2
+  {"", ""}, // WiFi 3
+  {"", ""}, // WiFi 4
+};
+const unsigned long WIFI_SWITCH_MS = 20000; // how long to try a new network before going back
 
 // ===== MQTT broker =====
 // Public test broker by default. For real use, switch to a private broker
@@ -62,8 +78,8 @@ const char* RESPONSE_TOPIC = "astrix-umbrella/cabinet/response"; // ESP32 -> Hiv
 const char* SLOTS_TOPIC    = "astrix-umbrella/cabinet/slots";    // ESP32 -> HiveMQ: what is in each slot (retained)
 const char* ACK_TOPIC      = "astrix-umbrella/cabinet/ack";      // ESP32 -> HiveMQ: "got it" for each command
 const char* STATUS_TOPIC   = "astrix-umbrella/cabinet/status";   // ESP32 -> HiveMQ: online/offline (retained)
-const char* STATUS_ONLINE  = "{\"online\":true,\"ack\":true}";
 const char* STATUS_OFFLINE = "{\"online\":false}";               // sent by the broker if the cabinet drops off
+const char* STATUS_SWITCHING = "{\"online\":false,\"switching\":true}"; // sent before leaving for another WiFi
 
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
@@ -198,6 +214,15 @@ unsigned long lightFor[NUM_SLOTS];
 
 // Command received over MQTT, run from loop() rather than inside the callback
 String pendingCommand = "";
+
+// WiFi switching (see handleWifiSwitch)
+enum WifiStep { WIFI_STEADY, WIFI_LEAVING, WIFI_JOINING, WIFI_GOING_BACK };
+Preferences prefs;
+int wifiCurrent = 0;              // network in use (0-3), saved in flash
+int wifiTarget = -1;              // network being switched to
+int wifiFailed = -1;              // last network that couldn't be joined, for the admin panel
+WifiStep wifiStep = WIFI_STEADY;
+unsigned long wifiStepAt = 0;
 unsigned long lastMqttAttempt = 0;
 
 // ===================== Servo =====================
@@ -614,10 +639,20 @@ void startJob(int slot, bool isBorrow) {
 
 // ===================== WiFi & MQTT =====================
 
+bool wifiHasName(int i) {
+  return i >= 0 && i < NUM_WIFI && strlen(WIFI_NETWORKS[i].ssid) > 0;
+}
+
+// At start-up: join the network saved in flash (WiFi 1 if none was saved yet)
 void connectWiFi() {
-  Serial.printf("Connecting to WiFi \"%s\"", WIFI_SSID);
+  prefs.begin("astrix", false);
+  wifiCurrent = prefs.getUChar("wifi", 0);
+  if (!wifiHasName(wifiCurrent)) wifiCurrent = 0;
+
+  Serial.printf("Connecting to WiFi %d \"%s\"", wifiCurrent + 1, WIFI_NETWORKS[wifiCurrent].ssid);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_NETWORKS[wifiCurrent].ssid, WIFI_NETWORKS[wifiCurrent].password);
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && (millis() - start) < 20000) {
@@ -631,6 +666,87 @@ void connectWiFi() {
     Serial.println(WiFi.localIP());
   } else {
     Serial.println("WiFi NOT connected - check the name/password. Will keep retrying in the background.");
+  }
+}
+
+// Admin command {"action":"WIFI","slot":1-4}: reply first, then handleWifiSwitch() moves over
+void requestWifiSwitch(int number) {
+  int target = number - 1;
+  publishAck("WIFI", number, wifiStep == WIFI_STEADY);
+  if (wifiStep != WIFI_STEADY) {
+    Serial.println("Ignored: already switching WiFi.");
+    return;
+  }
+
+  // Switching mid-borrow/return would lose its result while the cabinet is offline
+  bool slotBusy = false;
+  for (int i = 0; i < NUM_SLOTS; i++) slotBusy = slotBusy || jobs[i].phase != SLOT_IDLE;
+
+  Result res = { true, "", "" };
+  if (!wifiHasName(target)) {
+    res = { false, "NO_NETWORK", String("WiFi ") + number + " has no name set in the firmware." };
+  } else if (slotBusy) {
+    res = { false, "SLOTS_BUSY", "A borrow or return is in progress. Try again when it has finished." };
+  } else if (target == wifiCurrent) {
+    res.message = String("Already on WiFi ") + number + " (" + WIFI_NETWORKS[target].ssid + ").";
+  } else {
+    res.message = String("Switching to WiFi ") + number + " (" + WIFI_NETWORKS[target].ssid +
+                  "). The cabinet will be offline for a few seconds.";
+    wifiTarget = target;
+    wifiStep = WIFI_LEAVING;
+    wifiStepAt = millis();
+  }
+  publishResult("WIFI", number, res);
+}
+
+// Moves to the requested network a step at a time (never waits, so the slots keep working):
+// leave -> join the new network -> if that fails within WIFI_SWITCH_MS, rejoin the old one
+void handleWifiSwitch() {
+  unsigned long elapsed = millis() - wifiStepAt;
+  switch (wifiStep) {
+    case WIFI_STEADY:
+      return;
+
+    case WIFI_LEAVING:
+      if (elapsed < 500) return; // let the reply go out first
+      Serial.printf("Switching to WiFi %d \"%s\"...\n", wifiTarget + 1, WIFI_NETWORKS[wifiTarget].ssid);
+      if (mqtt.connected()) {
+        mqtt.publish(STATUS_TOPIC, STATUS_SWITCHING, true); // so the website stops sending commands
+        mqtt.disconnect();
+      }
+      WiFi.disconnect();
+      WiFi.begin(WIFI_NETWORKS[wifiTarget].ssid, WIFI_NETWORKS[wifiTarget].password);
+      wifiStep = WIFI_JOINING;
+      wifiStepAt = millis();
+      return;
+
+    case WIFI_JOINING:
+      if (WiFi.status() == WL_CONNECTED) {
+        wifiCurrent = wifiTarget;
+        wifiFailed = -1;
+        prefs.putUChar("wifi", wifiCurrent);
+        Serial.printf("Now on WiFi %d. IP: ", wifiCurrent + 1);
+        Serial.println(WiFi.localIP());
+        wifiStep = WIFI_STEADY;
+        lastMqttAttempt = 0; // reconnect to MQTT straight away
+      } else if (elapsed >= WIFI_SWITCH_MS) {
+        Serial.printf("Could not join WiFi %d. Going back to WiFi %d.\n", wifiTarget + 1, wifiCurrent + 1);
+        wifiFailed = wifiTarget;
+        WiFi.disconnect();
+        WiFi.begin(WIFI_NETWORKS[wifiCurrent].ssid, WIFI_NETWORKS[wifiCurrent].password);
+        wifiStep = WIFI_GOING_BACK;
+        wifiStepAt = millis();
+      }
+      return;
+
+    case WIFI_GOING_BACK:
+      // Back on the old network, or still trying it (WiFi keeps retrying it in the background)
+      if (WiFi.status() == WL_CONNECTED || elapsed >= WIFI_SWITCH_MS) {
+        Serial.printf("Back to WiFi %d: %s\n", wifiCurrent + 1, WiFi.status() == WL_CONNECTED ? "connected" : "still trying");
+        wifiStep = WIFI_STEADY;
+        lastMqttAttempt = 0;
+      }
+      return;
   }
 }
 
@@ -680,9 +796,31 @@ void publishResult(const char* action, int slotNumber, const Result &res) {
   }
 }
 
-// Retained "online" message (refreshed with the slot state, in case the broker drops it)
+// Copies a WiFi name into JSON, leaving out characters that would break it
+void appendJsonName(char* out, size_t size, const char* name) {
+  size_t n = strlen(out);
+  if (n < size - 1) out[n++] = '"';
+  for (const char* c = name; *c && n < size - 2; c++) {
+    if (*c != '"' && *c != '\\' && (unsigned char)*c >= 0x20) out[n++] = *c;
+  }
+  out[n++] = '"';
+  out[n] = '\0';
+}
+
+// Retained "online" message (refreshed with the slot state, in case the broker drops it), e.g.
+// {"online":true,"ack":true,"wifi":1,"networks":["Home","Hotspot","",""],"wifi_failed":3}
 void publishStatus() {
-  if (mqtt.connected()) mqtt.publish(STATUS_TOPIC, STATUS_ONLINE, true);
+  if (!mqtt.connected()) return;
+  char payload[320];
+  snprintf(payload, sizeof(payload), "{\"online\":true,\"ack\":true,\"wifi\":%d,\"networks\":[", wifiCurrent + 1);
+  for (int i = 0; i < NUM_WIFI; i++) {
+    if (i > 0) strncat(payload, ",", sizeof(payload) - strlen(payload) - 1);
+    appendJsonName(payload, sizeof(payload) - 40, WIFI_NETWORKS[i].ssid);
+  }
+  size_t n = strlen(payload);
+  if (wifiFailed >= 0) snprintf(payload + n, sizeof(payload) - n, "],\"wifi_failed\":%d}", wifiFailed + 1);
+  else snprintf(payload + n, sizeof(payload) - n, "]}");
+  mqtt.publish(STATUS_TOPIC, payload, true);
 }
 
 // "Got it" for a command, sent the moment it arrives. accepted=false means the slot is busy.
@@ -699,13 +837,19 @@ void publishAck(const String &action, int slotNumber, bool accepted) {
 void runAction(String action, int slotNumber) {
   action.toUpperCase();
 
+  // {"action":"WIFI","slot":n} uses "slot" for the WiFi number 1-4
+  if (action == "WIFI") {
+    requestWifiSwitch(slotNumber);
+    return;
+  }
+
   if (slotNumber < 1 || slotNumber > NUM_SLOTS) {
     Serial.println("Ignored: slot must be 1, 2, 3 or 4.");
     return;
   }
 
   if (action != "BORROW" && action != "RETURN" && action != "OPEN" && action != "CLOSE") {
-    Serial.println("Ignored: action must be BORROW, RETURN, OPEN, or CLOSE.");
+    Serial.println("Ignored: action must be BORROW, RETURN, OPEN, CLOSE, or WIFI.");
     return;
   }
 
@@ -828,6 +972,9 @@ void setup() {
 }
 
 void loop() {
+  // Move to another WiFi network if an admin asked for one
+  handleWifiSwitch();
+
   // Keep the MQTT connection up
   if (WiFi.status() == WL_CONNECTED && !mqtt.connected() && (millis() - lastMqttAttempt) >= 5000) {
     lastMqttAttempt = millis();

@@ -15,6 +15,7 @@ type Body = {
   index_no?: string;
   hours?: number;
   id?: number;
+  network?: number;
 };
 
 const ok = (message: string, extra: Record<string, unknown> = {}) => NextResponse.json({ success: true, message, ...extra });
@@ -48,6 +49,17 @@ export async function POST(request: Request) {
         await log(`ADMIN_LOCK_${command}`, `Admin ${adminIndex} sent ${command} to Slot ${slot}: ${result.ok ? result.response.status : result.error}`, { slot });
         if (!result.ok) return fail(cabinetErrorMessage(result.error, command), cabinetErrorStatus(result.error));
         return ok(result.response.message || `Slot ${slot}: ${command} sent.`);
+      }
+
+      // ---------------- Cabinet ----------------
+      case 'cabinet.wifi': {
+        const network = Number(body.network);
+        if (!Number.isInteger(network) || network < 1 || network > 4) return fail('Choose WiFi 1 to 4.');
+        const result = await runCabinetCommand('WIFI', network, 12000);
+        await log('ADMIN_WIFI', `Admin ${adminIndex} switched the cabinet to WiFi ${network}: ${result.ok ? result.response.status : result.error}`);
+        if (!result.ok) return fail(cabinetErrorMessage(result.error, 'WIFI'), cabinetErrorStatus(result.error));
+        if (result.response.status !== 'SUCCESS') return fail(result.response.message, 409);
+        return ok(result.response.message);
       }
 
       case 'slot.release': {

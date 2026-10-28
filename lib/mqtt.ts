@@ -18,6 +18,8 @@ export const MQTT_TOPIC_ACK = 'astrix-umbrella/cabinet/ack';
 
 // 5. ESP32 ➔ Server: online/offline (retained). {"online":true,"ack":true} when the cabinet
 //    connects; {"online":false} is its MQTT last will, published by the broker if it drops off.
+//    Newer firmware adds the WiFi in use: "wifi":1-4, "networks":[4 names], "wifi_failed":1-4.
+//    It sends {"online":false,"switching":true} just before moving to another WiFi.
 export const MQTT_TOPIC_STATUS = 'astrix-umbrella/cabinet/status';
 
 const STATUS_WAIT_MS = 1500; // how long to wait for the retained status before sending
@@ -28,8 +30,16 @@ export interface CabinetStatus {
   ack: boolean; // firmware sends "got it" replies (older firmware doesn't)
 }
 
+// The cabinet's WiFi: the network in use (1-4), the names of all 4, and the last one it couldn't join
+export interface CabinetWifi {
+  current: number;
+  networks: string[];
+  failed: number | null;
+}
+
 // Last cabinet status seen by this server instance (from commands and the slot sync)
 let lastStatus: { status: CabinetStatus; seenAt: number } | null = null;
+let lastWifi: CabinetWifi | null = null;
 
 export function rememberCabinetStatus(raw: string) {
   try {
@@ -37,7 +47,21 @@ export function rememberCabinetStatus(raw: string) {
     if (typeof data.online === 'boolean') {
       lastStatus = { status: { online: data.online, ack: Boolean(data.ack) }, seenAt: Date.now() };
     }
+    if (typeof data.wifi === 'number' && Array.isArray(data.networks)) {
+      lastWifi = {
+        current: data.wifi,
+        networks: data.networks.map((n: unknown) => String(n ?? '')),
+        failed: typeof data.wifi_failed === 'number' ? data.wifi_failed : null,
+      };
+    }
   } catch {}
+}
+
+/**
+ * The WiFi the cabinet last reported (kept while it is offline), or null with older firmware
+ */
+export function getCachedCabinetWifi(): CabinetWifi | null {
+  return lastWifi;
 }
 
 /**
@@ -48,7 +72,8 @@ export function getCachedCabinetOnline(): boolean | null {
   return lastStatus.status.online;
 }
 
-export type CabinetAction = 'BORROW' | 'RETURN' | 'OPEN' | 'CLOSE';
+// WIFI uses "slot" for the WiFi number 1-4
+export type CabinetAction = 'BORROW' | 'RETURN' | 'OPEN' | 'CLOSE' | 'WIFI';
 
 export interface CabinetCommand {
   action: CabinetAction;
@@ -59,7 +84,7 @@ export interface CabinetResponse {
   action: CabinetAction;
   slot: number;
   status: 'SUCCESS' | 'FAIL';
-  reason?: 'NOT_TAKEN' | 'NO_UMBRELLA' | 'WRONG_UMBRELLA';
+  reason?: 'NOT_TAKEN' | 'NO_UMBRELLA' | 'WRONG_UMBRELLA' | 'NO_NETWORK' | 'SLOTS_BUSY';
   message: string;
 }
 
@@ -254,6 +279,7 @@ export function cabinetErrorMessage(error: CabinetError, action: CabinetAction):
   if (error === 'BUSY') {
     return 'That slot is busy at the cabinet right now. Please try again in a moment.';
   }
+  if (action === 'WIFI') return 'The cabinet did not confirm the WiFi change in time.';
   if (action === 'OPEN') return 'The cabinet did not confirm lock opening in time.';
   if (action === 'CLOSE') return 'The cabinet did not confirm lock closing in time.';
   return action === 'BORROW'

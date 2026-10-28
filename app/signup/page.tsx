@@ -39,13 +39,22 @@ const NO_BARCODE_MESSAGE =
   'No barcode found in that photo. Take it closer, with the card flat and no glare on the barcode.';
 
 // Phone photos are 12-48 MP, but Safari can't draw anything over ~16.7 MP on a canvas
-// (the picture comes out blank). Each photo is shrunk first and tried in these ways:
-// [longest side in px, centre crop, turned 90°]
-const PHOTO_ATTEMPTS: [number, number, boolean][] = [
-  [2000, 1, false],
-  [1200, 1, false],
-  [2000, 0.6, false],
-  [1600, 1, true],
+// (the picture comes out blank), so each piece of the photo is shrunk to this size first
+const PHOTO_MAX_SIDE = 2000;
+
+// Without a built-in BarcodeDetector (iPhones), the reader only checks ~15 lines across
+// the middle of a picture, so a barcode near the top or bottom of a photo is missed.
+// The photo is read in these pieces until one has a barcode: whole, overlapping
+// horizontal strips, the same turned 90° (photo taken sideways), then half-width
+// close-ups for a barcode that is small in the photo.
+type PhotoRegion = [number, number, number, number]; // left, top, width, height (0-1)
+const STRIP_STARTS = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.7];
+const PHOTO_ATTEMPTS: [PhotoRegion, boolean][] = [
+  [[0, 0, 1, 1], false],
+  ...STRIP_STARTS.map((t): [PhotoRegion, boolean] => [[0, t, 1, 0.3], false]),
+  [[0, 0, 1, 1], true],
+  ...STRIP_STARTS.map((t): [PhotoRegion, boolean] => [[t, 0, 0.3, 1], true]),
+  ...[0, 0.25, 0.5].flatMap((l) => STRIP_STARTS.map((t): [PhotoRegion, boolean] => [[l, t, 0.5, 0.3], false])),
 ];
 
 const loadPhoto = (file: File): Promise<HTMLImageElement> =>
@@ -63,11 +72,13 @@ const loadPhoto = (file: File): Promise<HTMLImageElement> =>
     img.src = url;
   });
 
-// Draws a shrunk (and optionally cropped / turned) copy of the photo and returns it as a JPEG file
-const photoVariant = async (img: HTMLImageElement, maxSide: number, crop: number, turn: boolean): Promise<File> => {
-  const sw = img.naturalWidth * crop;
-  const sh = img.naturalHeight * crop;
-  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+// Draws a shrunk copy of one piece of the photo (turned 90° if asked) and returns it as a JPEG file
+const photoVariant = async (img: HTMLImageElement, [left, top, width, height]: PhotoRegion, turn: boolean): Promise<File> => {
+  const sx = img.naturalWidth * left;
+  const sy = img.naturalHeight * top;
+  const sw = img.naturalWidth * width;
+  const sh = img.naturalHeight * height;
+  const scale = Math.min(1, PHOTO_MAX_SIDE / Math.max(sw, sh));
   const w = Math.round(sw * scale);
   const h = Math.round(sh * scale);
   const canvas = document.createElement('canvas');
@@ -79,7 +90,7 @@ const photoVariant = async (img: HTMLImageElement, maxSide: number, crop: number
     ctx.translate(h, 0);
     ctx.rotate(Math.PI / 2);
   }
-  ctx.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, 0, 0, w, h);
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
   if (!blob) throw new Error('PHOTO_UNREADABLE');
   return new File([blob], 'id.jpg', { type: 'image/jpeg' });
@@ -322,12 +333,12 @@ export default function BarcodeScanPage() {
       const { Html5Qrcode } = await import('html5-qrcode');
       const fileScanner = new Html5Qrcode('astrix-file-scanner');
       try {
-        for (const [maxSide, crop, turn] of PHOTO_ATTEMPTS) {
+        for (const [region, turn] of PHOTO_ATTEMPTS) {
           try {
-            decodedText = await fileScanner.scanFile(await photoVariant(img, maxSide, crop, turn), false);
+            decodedText = await fileScanner.scanFile(await photoVariant(img, region, turn), false);
             break;
           } catch {
-            // No barcode in this version of the photo; try the next one
+            // No barcode in this piece of the photo; try the next one
           }
         }
       } finally {

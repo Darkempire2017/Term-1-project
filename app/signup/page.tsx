@@ -42,12 +42,20 @@ const NO_BARCODE_MESSAGE =
 // (the picture comes out blank), so each piece of the photo is shrunk to this size first
 const PHOTO_MAX_SIDE = 2000;
 
-// Without a built-in BarcodeDetector (iPhones), the reader only checks ~15 lines across
-// the middle of a picture, so a barcode near the top or bottom of a photo is missed.
-// The photo is read in these pieces until one has a barcode: whole, overlapping
-// horizontal strips, the same turned 90° (photo taken sideways), then half-width
-// close-ups for a barcode that is small in the photo.
+// A photo is read in pieces until one has a barcode.
 type PhotoRegion = [number, number, number, number]; // left, top, width, height (0-1)
+
+// With a BarcodeDetector (built in, or ZXing-C++ below), which searches the whole picture
+// at any angle: the whole photo, then half-size close-ups for a barcode that is small in it
+const HALF_STARTS = [0, 0.25, 0.5];
+const DETECTOR_ATTEMPTS: PhotoRegion[] = [
+  [0, 0, 1, 1],
+  ...HALF_STARTS.flatMap((l) => HALF_STARTS.map((t): PhotoRegion => [l, t, 0.5, 0.5])),
+];
+
+// Fallback when no BarcodeDetector could load: html5-qrcode's own reader only checks ~15
+// lines across the middle of a picture, so the photo is read whole, in overlapping
+// horizontal strips, the same turned 90° (photo taken sideways), then half-width close-ups
 const STRIP_STARTS = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.7];
 const PHOTO_ATTEMPTS: [PhotoRegion, boolean][] = [
   [[0, 0, 1, 1], false],
@@ -56,6 +64,33 @@ const PHOTO_ATTEMPTS: [PhotoRegion, boolean][] = [
   ...STRIP_STARTS.map((t): [PhotoRegion, boolean] => [[t, 0, 0.3, 1], true]),
   ...[0, 0.25, 0.5].flatMap((l) => STRIP_STARTS.map((t): [PhotoRegion, boolean] => [[l, t, 0.5, 0.3], false])),
 ];
+
+// Browsers without a built-in BarcodeDetector that reads Code 39 (iPhone Safari, desktop
+// Firefox) get one backed by ZXing-C++ in WebAssembly. html5-qrcode uses a BarcodeDetector
+// whenever there is one, for the camera and for photos, so both read far better than
+// with its own older reader. The .wasm comes from this site (scripts/copy-zxing-wasm.mjs).
+// If it can't load, html5-qrcode keeps its own reader.
+let barcodeReaderReady: Promise<void> | null = null;
+const loadBarcodeReader = () =>
+  (barcodeReaderReady ??= (async () => {
+    try {
+      if ('BarcodeDetector' in window) {
+        const formats: string[] = await (window as any).BarcodeDetector.getSupportedFormats();
+        if (formats.includes('code_39')) return;
+      }
+      const { BarcodeDetector, prepareZXingModule } = await import('barcode-detector/ponyfill');
+      await prepareZXingModule({
+        overrides: {
+          locateFile: (file: string, prefix: string) =>
+            file.endsWith('.wasm') ? '/zxing/zxing_reader.wasm' : prefix + file,
+        },
+        fireImmediately: true,
+      });
+      (window as any).BarcodeDetector = BarcodeDetector;
+    } catch (err) {
+      console.warn('ZXing reader could not load; using the fallback reader:', err);
+    }
+  })());
 
 const loadPhoto = (file: File): Promise<HTMLImageElement> =>
   new Promise((resolve, reject) => {
@@ -72,8 +107,8 @@ const loadPhoto = (file: File): Promise<HTMLImageElement> =>
     img.src = url;
   });
 
-// Draws a shrunk copy of one piece of the photo (turned 90° if asked) and returns it as a JPEG file
-const photoVariant = async (img: HTMLImageElement, [left, top, width, height]: PhotoRegion, turn: boolean): Promise<File> => {
+// Draws a shrunk copy of one piece of the photo, turned 90° if asked
+const drawPhotoPiece = (img: HTMLImageElement, [left, top, width, height]: PhotoRegion, turn: boolean): HTMLCanvasElement => {
   const sx = img.naturalWidth * left;
   const sy = img.naturalHeight * top;
   const sw = img.naturalWidth * width;
@@ -91,6 +126,11 @@ const photoVariant = async (img: HTMLImageElement, [left, top, width, height]: P
     ctx.rotate(Math.PI / 2);
   }
   ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+  return canvas;
+};
+
+// html5-qrcode reads photos only as files
+const canvasToFile = async (canvas: HTMLCanvasElement): Promise<File> => {
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
   if (!blob) throw new Error('PHOTO_UNREADABLE');
   return new File([blob], 'id.jpg', { type: 'image/jpeg' });
@@ -107,6 +147,7 @@ export default function BarcodeScanPage() {
   const unmountedRef = useRef(false);
   const pausedForBackgroundRef = useRef(false);
   const lastReadRef = useRef<{ index: string; count: number }>({ index: '', count: 0 });
+  const fullFrameTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -122,6 +163,8 @@ export default function BarcodeScanPage() {
 
   // Stop the camera if it is running (safe to call at any time)
   const stopScanner = useCallback(async () => {
+    if (fullFrameTimerRef.current) clearInterval(fullFrameTimerRef.current);
+    fullFrameTimerRef.current = null;
     const scanner = scannerRef.current;
     if (!scanner) return;
     try {
@@ -224,6 +267,7 @@ export default function BarcodeScanPage() {
     lastReadRef.current = { index: '', count: 0 };
 
     try {
+      await loadBarcodeReader();
       const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
       if (unmountedRef.current) return;
 
@@ -280,6 +324,28 @@ export default function BarcodeScanPage() {
 
       setIsScanning(true);
 
+      // html5-qrcode shrinks each camera frame to the size of the box on screen (~340 px
+      // wide) before reading it, which blurs the thin bars of an ID barcode together. With a
+      // BarcodeDetector, also read the full-size camera picture a few times a second.
+      if ('BarcodeDetector' in window) {
+        const detector = new (window as any).BarcodeDetector({ formats: ['code_39', 'code_128'] });
+        let reading = false;
+        if (fullFrameTimerRef.current) clearInterval(fullFrameTimerRef.current);
+        fullFrameTimerRef.current = setInterval(async () => {
+          const video = document.querySelector<HTMLVideoElement>('#astrix-barcode-reader video');
+          if (reading || busyRef.current || !video || video.readyState < 2) return;
+          reading = true;
+          try {
+            const found = await detector.detect(video);
+            if (found.length > 0) handleLiveDecode(found[0].rawValue);
+          } catch {
+            // Frame not ready or unreadable; try the next one
+          } finally {
+            reading = false;
+          }
+        }, 150);
+      }
+
       // Check if torch/flashlight is supported
       try {
         const capabilities = scanner.getRunningTrackCapabilities();
@@ -330,21 +396,33 @@ export default function BarcodeScanPage() {
     let decodedText: string | null = null;
     try {
       const img = await loadPhoto(file);
-      const { Html5Qrcode } = await import('html5-qrcode');
-      const fileScanner = new Html5Qrcode('astrix-file-scanner');
-      try {
-        for (const [region, turn] of PHOTO_ATTEMPTS) {
-          try {
-            decodedText = await fileScanner.scanFile(await photoVariant(img, region, turn), false);
+      await loadBarcodeReader();
+      if ('BarcodeDetector' in window) {
+        const detector = new (window as any).BarcodeDetector();
+        for (const region of DETECTOR_ATTEMPTS) {
+          const found = await detector.detect(drawPhotoPiece(img, region, false)).catch(() => []);
+          if (found.length > 0) {
+            decodedText = found[0].rawValue;
             break;
-          } catch {
-            // No barcode in this piece of the photo; try the next one
           }
         }
-      } finally {
+      } else {
+        const { Html5Qrcode } = await import('html5-qrcode');
+        const fileScanner = new Html5Qrcode('astrix-file-scanner');
         try {
-          fileScanner.clear();
-        } catch {}
+          for (const [region, turn] of PHOTO_ATTEMPTS) {
+            try {
+              decodedText = await fileScanner.scanFile(await canvasToFile(drawPhotoPiece(img, region, turn)), false);
+              break;
+            } catch {
+              // No barcode in this piece of the photo; try the next one
+            }
+          }
+        } finally {
+          try {
+            fileScanner.clear();
+          } catch {}
+        }
       }
     } catch (err) {
       console.warn('Photo scan error:', err);
@@ -391,6 +469,7 @@ export default function BarcodeScanPage() {
     return () => {
       unmountedRef.current = true;
       document.removeEventListener('visibilitychange', handleVisibility);
+      if (fullFrameTimerRef.current) clearInterval(fullFrameTimerRef.current);
       const scanner = scannerRef.current;
       if (scanner) {
         try {

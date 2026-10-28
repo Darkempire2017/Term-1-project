@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/copy-zxing-wasm.mjs",
     "dev": "next dev --turbopack",
+    "prebuild": "node scripts/copy-zxing-wasm.mjs",
     "build": "next build",
     "typecheck": "tsc --noEmit",
     "simulator": "node firmware/mock_esp32.js",
@@ -12,6 +14,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
+    "barcode-detector": "3.2.2",
     "clsx": "^2.1.1",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.475.0",

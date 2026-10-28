@@ -24,6 +24,8 @@ build/
 out/
 .next/
 *.tsbuildinfo
+# Copied from node_modules by scripts/copy-zxing-wasm.mjs
+public/zxing/
 
 # IDE & OS
 .DS_Store

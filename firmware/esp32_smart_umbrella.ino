@@ -47,8 +47,8 @@
 
 // ===== WiFi - type your WiFi name and password between the quotes =====
 // (do this in a copy outside the repo folder so the real values are never committed)
-const char* WIFI_SSID     = "";
-const char* WIFI_PASSWORD = "";
+const char* WIFI_SSID     = "astrix-umbrella";
+const char* WIFI_PASSWORD = "1234567890";
 
 // ===== MQTT broker =====
 // Public test broker by default. For real use, switch to a private broker

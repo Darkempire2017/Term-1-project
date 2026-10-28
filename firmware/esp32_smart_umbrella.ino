@@ -45,10 +45,12 @@
 #include <Adafruit_NeoPixel.h>
 #include <esp_arduino_version.h>
 
-// ===== WiFi - type your WiFi name and password between the quotes =====
-// (do this in a copy outside the repo folder so the real values are never committed)
+// ===== WiFi - the station joins any phone hotspot with this name and password =====
+// If the hotspot drops, it keeps retrying (see keepWiFiUp), so another phone can
+// take over with the same name and password without pressing reset.
 const char* WIFI_SSID     = "astrix-umbrella";
 const char* WIFI_PASSWORD = "1234567890";
+const unsigned long WIFI_RETRY_MS = 15000; // while WiFi is down, start a new attempt this often
 
 // ===== MQTT broker =====
 // Public test broker by default. For real use, switch to a private broker
@@ -201,6 +203,8 @@ unsigned long lightFor[NUM_SLOTS];
 // Command received over MQTT, run from loop() rather than inside the callback
 String pendingCommand = "";
 unsigned long lastMqttAttempt = 0;
+bool wifiDown = false;             // WiFi was lost and keepWiFiUp is trying to rejoin
+unsigned long lastWifiAttempt = 0;
 
 // ===================== Servo =====================
 
@@ -650,6 +654,38 @@ void connectWiFi() {
   }
 }
 
+// Called from loop(): rejoins the hotspot if WiFi drops. The ESP32's own reconnect
+// handles short drops, but it can give up if the hotspot is gone for a while (or a
+// different phone takes over), so every WIFI_RETRY_MS we start a fresh attempt.
+// WiFi.begin() doesn't wait, so the slots keep working while it searches.
+void keepWiFiUp() {
+  unsigned long now = millis();
+  if (WiFi.status() == WL_CONNECTED) {
+    if (wifiDown) {
+      wifiDown = false;
+      Serial.print("WiFi connected again. IP: ");
+      Serial.println(WiFi.localIP());
+      // The old MQTT connection died with the WiFi: drop it so loop() reconnects now
+      // instead of waiting for the keep-alive to notice
+      mqtt.disconnect();
+      lastMqttAttempt = now - 5000;
+    }
+    return;
+  }
+  if (!wifiDown) {
+    wifiDown = true;
+    lastWifiAttempt = now; // give the ESP32's own reconnect the first try
+    Serial.println("WiFi lost. Reconnecting...");
+    return;
+  }
+  if (now - lastWifiAttempt >= WIFI_RETRY_MS) {
+    lastWifiAttempt = now;
+    Serial.printf("Still no WiFi. Trying \"%s\" again...\n", WIFI_SSID);
+    WiFi.disconnect();
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  }
+}
+
 void connectMqtt() {
   Serial.print("Connecting to MQTT broker... ");
   // The "last will": if the cabinet drops off without saying goodbye, the broker
@@ -839,11 +875,16 @@ void setup() {
   mqtt.setKeepAlive(15); // loop() never waits, so a short keep-alive is safe; the broker notices a drop in ~20 s
   if (WiFi.status() == WL_CONNECTED) connectMqtt();
   lastMqttAttempt = millis();
+  wifiDown = (WiFi.status() != WL_CONNECTED);
+  lastWifiAttempt = millis();
 
   Serial.println("System Ready. Send a command over MQTT, or type b1-b4 / r1-r4 here.");
 }
 
 void loop() {
+  // Rejoin the hotspot if WiFi dropped
+  keepWiFiUp();
+
   // Keep the MQTT connection up
   if (WiFi.status() == WL_CONNECTED && !mqtt.connected() && (millis() - lastMqttAttempt) >= 5000) {
     lastMqttAttempt = millis();

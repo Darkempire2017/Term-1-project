@@ -15,7 +15,8 @@
  *                          shared SCK 11, MOSI 12, MISO 13, RST 14
  *   - 4x WS2812B strips    GPIO 39, 40, 41, 42 (6 LEDs each, one per slot)
  *                          green = borrow, blue = return, red = error
- *   Power the servos from a separate 5 V supply (shared GND): up to 4 can move at once.
+ *   Power the servos from a separate 5 V supply (shared GND). Only one servo moves at
+ *   a time; the others wait their turn (see updateServos).
  *   Power the LED strips from 5 V too (up to ~1.5 A at full white), shared GND.
  *
  * MQTT:
@@ -142,6 +143,7 @@ const unsigned long errorShowTime = 10000; // red stays on this long after NOT_T
 int currentPosition[NUM_SLOTS];
 int targetPosition[NUM_SLOTS];
 unsigned long lastStepTime[NUM_SLOTS];
+int movingMotor = -1; // the one servo allowed to move right now, -1 = none
 
 // Outcome of a borrow/return, sent back over MQTT
 struct Result {
@@ -223,16 +225,30 @@ void servoWrite(int i, int angle) {
 #endif
 }
 
-// Moves each servo 1 degree toward its target every stepInterval ms,
-// so all locks can open and close at the same time
+// Moves the servos 1 degree toward their targets every stepInterval ms, one at a
+// time: two motors moving together pull the 5 V supply down and reset the ESP32.
+// A lock that needs to move waits until the moving one has arrived (about 2.7 s);
+// if several are waiting, the lowest slot goes first.
 void updateServos() {
   unsigned long now = millis();
-  for (int i = 0; i < NUM_SLOTS; i++) {
-    if (currentPosition[i] != targetPosition[i] && (now - lastStepTime[i]) >= stepInterval) {
-      currentPosition[i] += (targetPosition[i] > currentPosition[i]) ? 1 : -1;
-      servoWrite(i, currentPosition[i]);
-      lastStepTime[i] = now;
+  if (movingMotor >= 0 && currentPosition[movingMotor] == targetPosition[movingMotor]) {
+    movingMotor = -1;
+  }
+  if (movingMotor < 0) {
+    for (int i = 0; i < NUM_SLOTS; i++) {
+      if (currentPosition[i] != targetPosition[i]) {
+        movingMotor = i;
+        Serial.printf("Motor %d starting.\n", i + 1);
+        break;
+      }
     }
+    if (movingMotor < 0) return;
+  }
+  int i = movingMotor;
+  if ((now - lastStepTime[i]) >= stepInterval) {
+    currentPosition[i] += (targetPosition[i] > currentPosition[i]) ? 1 : -1;
+    servoWrite(i, currentPosition[i]);
+    lastStepTime[i] = now;
   }
 }
 

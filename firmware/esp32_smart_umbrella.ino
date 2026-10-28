@@ -15,7 +15,8 @@
  *                          shared SCK 11, MOSI 12, MISO 13, RST 14
  *   - 4x WS2812B strips    GPIO 39, 40, 41, 42 (6 LEDs each, one per slot)
  *                          green = borrow, blue = return, red = error
- *   Power the servos from a separate 5 V supply (shared GND): up to 4 can move at once.
+ *   Power the servos from a separate 5 V supply (shared GND): up to 4 can move at once,
+ *   but they start at least MOTOR_START_GAP apart.
  *   Power the LED strips from 5 V too (up to ~1.5 A at full white), shared GND.
  *
  * MQTT:
@@ -153,12 +154,17 @@ const int OPEN_CHECKS             = 5;
 const unsigned long holdTime      = 2000; // button must stay pressed/unpressed this long before reading the tag
 const unsigned long tagScanWindow = 500;  // keep trying to read the tag for this long
 const unsigned long stepInterval  = 15;   // ms per 1 degree of servo movement
+// Two motors starting together pull the 5 V supply down and reset the ESP32, so a
+// motor waits this long after another one starts. Raise it (up to ~3000) if it still resets.
+const unsigned long MOTOR_START_GAP = 1000;
 const unsigned long errorShowTime = 10000; // red stays on this long after NOT_TAKEN / NO_UMBRELLA
 
 // Servo positions (moved 1 degree at a time by updateServos)
 int currentPosition[NUM_SLOTS];
 int targetPosition[NUM_SLOTS];
 unsigned long lastStepTime[NUM_SLOTS];
+bool motorRunning[NUM_SLOTS];  // moving now (already past its start gap)
+unsigned long lastMotorStart = 0;
 
 // Outcome of a borrow/return, sent back over MQTT
 struct Result {
@@ -264,11 +270,22 @@ void servoWrite(int i, int angle) {
 }
 
 // Moves each servo 1 degree toward its target every stepInterval ms,
-// so all locks can open and close at the same time
+// so all locks can open and close at the same time. A servo that is standing
+// still waits until MOTOR_START_GAP has passed since the last one started.
 void updateServos() {
   unsigned long now = millis();
   for (int i = 0; i < NUM_SLOTS; i++) {
-    if (currentPosition[i] != targetPosition[i] && (now - lastStepTime[i]) >= stepInterval) {
+    if (currentPosition[i] == targetPosition[i]) {
+      motorRunning[i] = false;
+      continue;
+    }
+    if (!motorRunning[i]) {
+      if (now - lastMotorStart < MOTOR_START_GAP) continue; // another motor just started
+      motorRunning[i] = true;
+      lastMotorStart = now;
+      Serial.printf("Motor %d starting.\n", i + 1);
+    }
+    if ((now - lastStepTime[i]) >= stepInterval) {
       currentPosition[i] += (targetPosition[i] > currentPosition[i]) ? 1 : -1;
       servoWrite(i, currentPosition[i]);
       lastStepTime[i] = now;
@@ -1090,6 +1107,7 @@ void setup() {
     currentPosition[i] = LOCK_CLOSED;
     targetPosition[i] = LOCK_CLOSED;
     lastStepTime[i] = 0;
+    motorRunning[i] = false;
     servoWrite(i, LOCK_CLOSED);
 
     // Configure switch pin to use internal pull-up resistor

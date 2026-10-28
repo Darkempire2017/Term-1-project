@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import { Lock, Eye, EyeOff, ArrowRight, ArrowLeft, Check, AlertCircle } from 'lucide-react';
 import { StormHeader } from '@/components/Storm';
 import { SignupProgress } from '@/components/SignupProgress';
-import { seedStationUser } from '@/lib/stationCache';
 import '../../theme-pages.css';
 
 export default function SignUpPasswordPage() {
@@ -90,14 +89,8 @@ export default function SignUpPasswordPage() {
       sessionStorage.removeItem('astrix_verified_code');
       sessionStorage.removeItem('astrix_verified_index');
 
-      // Cache user info for instant display
-      if (json.user) {
-        localStorage.setItem('astrix_user', JSON.stringify(json.user));
-        seedStationUser(json.user);
-      }
-
-      // Direct redirect to Dashboard!
-      router.push('/dashboard');
+      // Signup doesn't start a session, so send the student to sign in
+      router.replace(`/login?verified=true&index_no=${encodeURIComponent(indexNo)}`);
     } catch (err: any) {
       console.warn('Account creation failed:', err.message);
       setError('Could not connect to the server. Please check your connection.');

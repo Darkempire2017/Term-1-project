@@ -37,7 +37,7 @@ function LoginForm() {
     }
 
     if (isVerified) {
-      setSuccess('✅ Email verified & password created! Enter your credentials to sign in.');
+      setSuccess("You've successfully created an account. Please sign in to continue.");
     } else if (isReset) {
       setSuccess('✅ Password reset successfully! Please sign in with your new password.');
     }

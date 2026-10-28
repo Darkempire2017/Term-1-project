@@ -62,6 +62,15 @@ export async function POST(request: Request) {
         return ok(result.response.message);
       }
 
+      case 'cabinet.diag': {
+        // Checks all 4 RFID readers (resetting any that are stuck); takes up to ~15 s
+        const result = await runCabinetCommand('DIAG', 0, 25000);
+        await log('ADMIN_RFID_CHECK', `Admin ${adminIndex} checked the RFID readers: ${result.ok ? result.response.message : result.error}`);
+        if (!result.ok) return fail(cabinetErrorMessage(result.error, 'DIAG'), cabinetErrorStatus(result.error));
+        if (result.response.status !== 'SUCCESS') return fail(result.response.message, 409);
+        return ok(result.response.message, { tries: result.response.tries, readers: result.response.readers || [] });
+      }
+
       case 'slot.release': {
         if (!validSlot) return fail('Choose a slot from 1 to 4.');
         const { data } = await supabaseAdmin

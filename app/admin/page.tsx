@@ -67,6 +67,18 @@ interface Overview {
   events_table_missing: boolean;
 }
 
+interface ReaderReport {
+  reader: number;
+  chip: number;
+  antenna: boolean;
+  gain_db: number;
+  errors: number;
+  button: boolean;
+  replies: number;
+  tag: string;
+  fix: 'none' | 'reset' | 'hardware reset' | 'failed';
+}
+
 interface Loan {
   record_id: string;
   umbrella_id: string;
@@ -128,6 +140,8 @@ export default function AdminPage() {
   const [denied, setDenied] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [rfidCheck, setRfidCheck] = useState<{ at: number; message: string; tries: number; readers: ReaderReport[] } | null>(null);
+  const [rfidRunning, setRfidRunning] = useState(false);
   const [notifyOn, setNotifyOn] = useState(false);
 
   const [loans, setLoans] = useState<Loan[]>([]);
@@ -221,6 +235,29 @@ export default function AdminPage() {
       setBusyAction(null);
       loadOverview();
       loadList();
+    }
+  };
+
+  // The cabinet tests its 4 RFID readers (resetting any that are stuck) and sends back the results
+  const runRfidCheck = async () => {
+    setRfidRunning(true);
+    try {
+      const res = await fetch('/api/admin/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cabinet.diag' }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setRfidCheck({ at: Date.now(), message: json.message, tries: json.tries || 20, readers: json.readers || [] });
+      } else {
+        setToast({ ok: false, text: json.message || 'The RFID check failed.' });
+      }
+    } catch {
+      setToast({ ok: false, text: 'Could not reach the server.' });
+    } finally {
+      setRfidRunning(false);
+      loadOverview();
     }
   };
 
@@ -406,6 +443,68 @@ export default function AdminPage() {
                   );
                 })}
               </div>
+            </div>
+
+            {/* RFID readers: the cabinet tests all 4 and resets any that are stuck */}
+            <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-slate-900">RFID readers</p>
+                  <p className="text-[11px] text-slate-500">
+                    {rfidCheck ? `Checked ${timeAgo(rfidCheck.at)}` : 'Tests all 4 readers and resets any that are stuck. Takes up to 15 s.'}
+                  </p>
+                </div>
+                <button
+                  onClick={runRfidCheck}
+                  disabled={rfidRunning || o.cabinet.online !== true}
+                  className={`${btn} shrink-0 border-sky-300 bg-sky-50 text-sky-800`}
+                >
+                  {rfidRunning ? 'Checking…' : 'Check readers'}
+                </button>
+              </div>
+              {rfidCheck && (
+                <>
+                  <p className="text-[11px] font-semibold text-slate-700">{rfidCheck.message}</p>
+                  <div className="space-y-1.5">
+                    {rfidCheck.readers.map((r) => {
+                      const answering = r.chip !== 0 && r.chip !== 255;
+                      const failed = r.fix === 'failed' || !answering || !r.antenna;
+                      const wasStuck = r.fix === 'reset' || r.fix === 'hardware reset';
+                      const tries = rfidCheck.tries;
+                      const signal =
+                        r.replies === tries ? 'strong' : r.replies >= 14 ? 'good' : r.replies >= 5 ? 'weak' : r.replies > 0 ? 'very weak' : 'no tag answered';
+                      const weak = !failed && r.button && r.replies < 14;
+                      return (
+                        <div
+                          key={r.reader}
+                          className={`p-2.5 rounded-xl border text-[11px] ${
+                            failed ? 'border-rose-200 bg-rose-50' : wasStuck || weak ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex justify-between font-bold text-slate-900">
+                            <span>Reader {r.reader}</span>
+                            <span className={failed ? 'text-rose-700' : wasStuck || weak ? 'text-amber-700' : 'text-emerald-700'}>
+                              {failed ? 'Not working' : wasStuck ? `Was stuck, fixed by ${r.fix}` : weak ? 'Weak signal' : 'OK'}
+                            </span>
+                          </div>
+                          <p className="text-slate-600">
+                            Chip 0x{r.chip.toString(16).toUpperCase().padStart(2, '0')} {answering ? 'answering' : 'not answering (wiring/power)'} · antenna{' '}
+                            {r.antenna ? 'on' : 'off'}
+                            {answering ? ` · gain ${r.gain_db} dB` : ''}
+                            {answering && r.errors ? ` · error bits 0x${r.errors.toString(16).toUpperCase()}` : ''}
+                          </p>
+                          <p className="text-slate-600">
+                            {r.button ? 'Umbrella in' : 'No umbrella'} · signal {r.replies}/{tries} ({signal}){r.tag ? ` · tag ${r.tag}` : ''}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    Signal = how many of {rfidCheck.tries} wake-up calls the umbrella tag in that slot answered, so it needs an umbrella in the slot.
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-2">

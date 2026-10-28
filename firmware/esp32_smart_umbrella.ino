@@ -21,6 +21,7 @@
  * MQTT:
  *   - Subscribe: astrix-umbrella/cabinet/command   {"action":"BORROW"|"RETURN","slot":1-4}
  *                                                  {"action":"WIFI","slot":1-4} switches to WiFi 1-4
+ *                                                  {"action":"DIAG","slot":0} checks the RFID readers
  *   - Publish:   astrix-umbrella/cabinet/response  (5 standard responses, QoS 0)
  *   - Publish:   astrix-umbrella/cabinet/slots     (retained: what is in each slot, lock state, so the website can sync)
  *   - Publish:   astrix-umbrella/cabinet/ack       ("got it" the moment a command arrives)
@@ -164,6 +165,20 @@ struct Result {
   bool success;
   const char* reason; // only used when success is false
   String message;
+};
+
+// One RFID reader's state from the reader check (see "RFID diagnostics")
+const int DIAG_TRIES = 20;
+
+struct ReaderReport {
+  byte chip;        // version register: 0x00 or 0xFF means the reader isn't answering
+  bool antennaOn;
+  int gainDb;
+  byte errors;      // error register bits
+  bool button;      // umbrella button pressed
+  int replies;      // tag replies out of DIAG_TRIES
+  String tag;
+  const char* fix;  // "none", "reset" (fixed by resetting it), "hardware reset", or "failed"
 };
 
 // One job per slot
@@ -334,6 +349,168 @@ int umbrellaIndex(const String &tagUID) {
     if (tagUID == UMBRELLA_UIDS[u]) return u;
   }
   return UNKNOWN_TAG;
+}
+
+// Hardware reset all 4 readers at once through the shared RST pin, then set each one up
+void resetAllReaders() {
+  digitalWrite(RFID_RST_PIN, LOW);
+  delay(10);
+  digitalWrite(RFID_RST_PIN, HIGH);
+  delay(50);
+  for (int r = 0; r < NUM_SLOTS; r++) {
+    readers[r].PCD_Init();
+  }
+}
+
+// ===================== RFID diagnostics =====================
+// Run from the admin panel ("Check RFID readers", MQTT {"action":"DIAG","slot":0}) or by
+// typing d in the Serial Monitor. The RC522 can't measure signal strength, so the "signal"
+// is how many of DIAG_TRIES wake-up calls the tag in front of the reader answers.
+
+bool readerWorks(const ReaderReport &rep) {
+  return rep.chip != 0x00 && rep.chip != 0xFF && rep.antennaOn;
+}
+
+const char* signalWord(int replies) {
+  return replies == DIAG_TRIES ? "strong" : replies >= 14 ? "good" : replies >= 5 ? "weak" :
+         replies > 0 ? "very weak" : "no tag answered";
+}
+
+ReaderReport measureReader(int r) {
+  MFRC522 &rfid = readers[r];
+  const int GAIN_DB[8] = { 18, 23, 18, 23, 33, 38, 43, 48 };
+  ReaderReport rep;
+  rep.chip = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+  rep.antennaOn = (rfid.PCD_ReadRegister(MFRC522::TxControlReg) & 0x03) == 0x03;
+  rep.gainDb = GAIN_DB[(rfid.PCD_GetAntennaGain() >> 4) & 0x07];
+  rep.errors = rfid.PCD_ReadRegister(MFRC522::ErrorReg);
+  rep.button = digitalRead(BUTTON_PINS[r]) == LOW;
+  rep.replies = 0;
+  rep.tag = "";
+  rep.fix = "none";
+  if (readerWorks(rep)) {
+    for (int i = 0; i < DIAG_TRIES; i++) {
+      byte atqa[2];
+      byte atqaSize = sizeof(atqa);
+      if (rfid.PICC_WakeupA(atqa, &atqaSize) == MFRC522::STATUS_OK) rep.replies++;
+      rfid.PICC_HaltA();
+      delay(5);
+    }
+    tryReadCard(rfid, rep.tag);
+  }
+  return rep;
+}
+
+void printReaderReport(int r, const ReaderReport &rep) {
+  bool answering = rep.chip != 0x00 && rep.chip != 0xFF;
+  if (answering) {
+    Serial.printf("Reader %d (SS pin %d): chip 0x%02X answering | antenna %s, gain %d dB | error bits 0x%02X\n",
+                  r + 1, RFID_SS_PINS[r], rep.chip, rep.antennaOn ? "ON" : "OFF", rep.gainDb, rep.errors);
+  } else {
+    Serial.printf("Reader %d (SS pin %d): chip 0x%02X NOT ANSWERING (wiring/power)\n", r + 1, RFID_SS_PINS[r], rep.chip);
+  }
+  Serial.printf("          umbrella button %s | tag replies %d/%d (%s)%s%s\n",
+                rep.button ? "pressed" : "not pressed", rep.replies, DIAG_TRIES, signalWord(rep.replies),
+                rep.tag.length() > 0 ? " | tag " : "", rep.tag.c_str());
+}
+
+// Tests every reader. One that fails is reset on its own and tested again, then (if it still
+// fails) all 4 are hardware reset, to show whether it was stuck or is faulty.
+// Fills reports with each reader's final state and returns a one-line summary.
+String diagnoseReaders(ReaderReport reports[], bool print) {
+  bool anyFailed = false;
+  for (int r = 0; r < NUM_SLOTS; r++) {
+    reports[r] = measureReader(r);
+    if (print) printReaderReport(r, reports[r]);
+    anyFailed = anyFailed || !readerWorks(reports[r]);
+  }
+  if (!anyFailed) return "All 4 readers are answering with their antennas on.";
+
+  if (print) Serial.println("--- Resetting only the failed reader(s) and testing again ---");
+  bool stillFailed = false;
+  for (int r = 0; r < NUM_SLOTS; r++) {
+    if (readerWorks(reports[r])) continue;
+    readers[r].PCD_Init();
+    delay(50);
+    reports[r] = measureReader(r);
+    reports[r].fix = readerWorks(reports[r]) ? "reset" : "failed";
+    if (print) printReaderReport(r, reports[r]);
+    stillFailed = stillFailed || !readerWorks(reports[r]);
+  }
+
+  if (stillFailed) {
+    if (print) Serial.println("--- Still failing: hardware reset of all 4 readers (shared RST pin) ---");
+    resetAllReaders();
+    for (int r = 0; r < NUM_SLOTS; r++) {
+      const char* before = reports[r].fix;
+      reports[r] = measureReader(r);
+      reports[r].fix = strcmp(before, "failed") != 0 ? before : readerWorks(reports[r]) ? "hardware reset" : "failed";
+      if (print) printReaderReport(r, reports[r]);
+    }
+  }
+
+  String fixedList = "", brokenList = "";
+  for (int r = 0; r < NUM_SLOTS; r++) {
+    String &list = strcmp(reports[r].fix, "failed") == 0 ? brokenList : fixedList;
+    if (strcmp(reports[r].fix, "none") != 0) list += String(list.length() > 0 ? ", " : "") + (r + 1);
+  }
+  String summary = "";
+  if (fixedList.length() > 0) {
+    summary += String("Reader ") + fixedList + " had got stuck and works again after a reset (usually a power dip or servo noise). ";
+  }
+  if (brokenList.length() > 0) {
+    summary += String("Reader ") + brokenList + " still failing after a hardware reset: check its wiring and 3.3 V, or swap the module.";
+  }
+  summary.trim();
+  return summary;
+}
+
+// Serial command "d"
+void diagnoseFromSerial() {
+  for (int s = 0; s < NUM_SLOTS; s++) {
+    if (jobs[s].phase != SLOT_IDLE) {
+      Serial.println("A slot is busy. Type d again when no borrow/return is running.");
+      return;
+    }
+  }
+  Serial.println("\n=== RFID reader check (umbrellas in the slots give the signal test a tag) ===");
+  ReaderReport reports[NUM_SLOTS];
+  Serial.println(diagnoseReaders(reports, true));
+  Serial.println();
+}
+
+// Admin panel "Check RFID readers": {"action":"DIAG","slot":0}. Replies on the response topic:
+// {"action":"DIAG","slot":0,"status":"SUCCESS","message":<summary>,"tries":20,"readers":[{...},...]}
+void runDiagnosisCommand() {
+  publishAck("DIAG", 0, true);
+  for (int s = 0; s < NUM_SLOTS; s++) {
+    if (jobs[s].phase != SLOT_IDLE) {
+      Result res = { false, "SLOTS_BUSY", "A borrow or return is in progress. Try again when it has finished." };
+      publishResult("DIAG", 0, res);
+      return;
+    }
+  }
+
+  Serial.println("=== RFID reader check requested over MQTT ===");
+  ReaderReport reports[NUM_SLOTS];
+  String summary = diagnoseReaders(reports, true);
+
+  static char payload[1024];
+  int n = snprintf(payload, sizeof(payload),
+                   "{\"action\":\"DIAG\",\"slot\":0,\"status\":\"SUCCESS\",\"message\":\"%s\",\"tries\":%d,\"readers\":[",
+                   summary.c_str(), DIAG_TRIES);
+  for (int r = 0; r < NUM_SLOTS && n < (int)sizeof(payload); r++) {
+    const ReaderReport &rep = reports[r];
+    n += snprintf(payload + n, sizeof(payload) - n,
+                  "%s{\"reader\":%d,\"chip\":%d,\"antenna\":%s,\"gain_db\":%d,\"errors\":%d,\"button\":%s,"
+                  "\"replies\":%d,\"tag\":\"%s\",\"fix\":\"%s\"}",
+                  r > 0 ? "," : "", r + 1, rep.chip, rep.antennaOn ? "true" : "false", rep.gainDb, rep.errors,
+                  rep.button ? "true" : "false", rep.replies, rep.tag.c_str(), rep.fix);
+  }
+  if (n < (int)sizeof(payload)) snprintf(payload + n, sizeof(payload) - n, "]}");
+
+  if (!mqtt.connected()) connectMqtt();
+  if (!mqtt.publish(RESPONSE_TOPIC, payload)) Serial.println("Could not send the RFID check over MQTT.");
 }
 
 // ===================== Slot jobs =====================
@@ -837,6 +1014,12 @@ void publishAck(const String &action, int slotNumber, bool accepted) {
 void runAction(String action, int slotNumber) {
   action.toUpperCase();
 
+  // {"action":"DIAG","slot":0}: check the RFID readers and send back the results
+  if (action == "DIAG") {
+    runDiagnosisCommand();
+    return;
+  }
+
   // {"action":"WIFI","slot":n} uses "slot" for the WiFi number 1-4
   if (action == "WIFI") {
     requestWifiSwitch(slotNumber);
@@ -849,7 +1032,7 @@ void runAction(String action, int slotNumber) {
   }
 
   if (action != "BORROW" && action != "RETURN" && action != "OPEN" && action != "CLOSE") {
-    Serial.println("Ignored: action must be BORROW, RETURN, OPEN, CLOSE, or WIFI.");
+    Serial.println("Ignored: action must be BORROW, RETURN, OPEN, CLOSE, WIFI, or DIAG.");
     return;
   }
 
@@ -946,29 +1129,21 @@ void setup() {
     digitalWrite(RFID_SS_PINS[r], HIGH);
   }
 
-  // Hardware reset all 4 readers at once through the shared RST pin
-  pinMode(RFID_RST_PIN, OUTPUT);
-  digitalWrite(RFID_RST_PIN, LOW);
-  delay(10);
-  digitalWrite(RFID_RST_PIN, HIGH);
-  delay(50);
-
   // RFID Setup
+  pinMode(RFID_RST_PIN, OUTPUT);
   SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
-  for (int r = 0; r < NUM_SLOTS; r++) {
-    readers[r].PCD_Init();
-  }
+  resetAllReaders();
 
   // WiFi & MQTT Setup
   connectWiFi();
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setCallback(onMqttMessage);
-  mqtt.setBufferSize(512);
+  mqtt.setBufferSize(1024); // the RFID check result is ~800 bytes
   mqtt.setKeepAlive(15); // loop() never waits, so a short keep-alive is safe; the broker notices a drop in ~20 s
   if (WiFi.status() == WL_CONNECTED) connectMqtt();
   lastMqttAttempt = millis();
 
-  Serial.println("System Ready. Send a command over MQTT, or type b1-b4 / r1-r4 here.");
+  Serial.println("System Ready. Send a command over MQTT, or type b1-b4 / r1-r4 here (d = check the RFID readers).");
 }
 
 void loop() {
@@ -989,12 +1164,14 @@ void loop() {
     handleCommand(cmd);
   }
 
-  // For testing: type b1-b4 to borrow or r1-r4 to return
+  // For testing: type b1-b4 to borrow, r1-r4 to return, or d to check the RFID readers
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
     cmd.toLowerCase();
-    if (cmd.length() == 2 && cmd[1] >= '1' && cmd[1] <= '4') {
+    if (cmd == "d") {
+      diagnoseFromSerial();
+    } else if (cmd.length() == 2 && cmd[1] >= '1' && cmd[1] <= '4') {
       if (cmd[0] == 'b') runAction("BORROW", cmd[1] - '0');
       else if (cmd[0] == 'r') runAction("RETURN", cmd[1] - '0');
     }

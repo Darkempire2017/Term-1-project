@@ -13,7 +13,7 @@ Run [`supabase/migrations/20261026_admin_panel.sql`](../supabase/migrations/2026
 
 | Tab | Shows | Actions |
 | :--- | :--- | :--- |
-| **Overview** | Cabinet online/offline, all 4 slots (database vs. cabinet report, lock state), open/overdue loans, student count, open alerts, latest activity, the cabinet's WiFi | Refresh, switch the cabinet to WiFi 1-4 (goes back if it can't join within 20 s) |
+| **Overview** | Cabinet online/offline, all 4 slots (database vs. cabinet report, lock state), open/overdue loans, student count, open alerts, latest activity, the cabinet's WiFi | Refresh, switch the cabinet to WiFi 1-4 (goes back if it can't join within 20 s), check the 4 RFID readers (resets any that are stuck; same as typing `d` in the Serial Monitor) |
 | **Alerts** | Open alerts (optionally handled ones too) | Mark handled, mark all handled |
 | **Slots** | Each slot's state | Open lock, close lock, release a held slot, mark available, mark out |
 | **Loans** | Open / returned / all loans | Mark returned, extend +24 h, delete the record |

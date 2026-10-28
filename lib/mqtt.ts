@@ -72,8 +72,21 @@ export function getCachedCabinetOnline(): boolean | null {
   return lastStatus.status.online;
 }
 
-// WIFI uses "slot" for the WiFi number 1-4
-export type CabinetAction = 'BORROW' | 'RETURN' | 'OPEN' | 'CLOSE' | 'WIFI';
+// WIFI uses "slot" for the WiFi number 1-4; DIAG (RFID reader check) uses slot 0
+export type CabinetAction = 'BORROW' | 'RETURN' | 'OPEN' | 'CLOSE' | 'WIFI' | 'DIAG';
+
+// One RFID reader from the cabinet's reader check (DIAG)
+export interface CabinetReaderReport {
+  reader: number;
+  chip: number; // version register: 0 or 255 means the reader isn't answering
+  antenna: boolean;
+  gain_db: number;
+  errors: number;
+  button: boolean; // umbrella button pressed
+  replies: number; // tag replies out of "tries"
+  tag: string;
+  fix: 'none' | 'reset' | 'hardware reset' | 'failed';
+}
 
 export interface CabinetCommand {
   action: CabinetAction;
@@ -86,6 +99,8 @@ export interface CabinetResponse {
   status: 'SUCCESS' | 'FAIL';
   reason?: 'NOT_TAKEN' | 'NO_UMBRELLA' | 'WRONG_UMBRELLA' | 'NO_NETWORK' | 'SLOTS_BUSY';
   message: string;
+  tries?: number; // DIAG only
+  readers?: CabinetReaderReport[]; // DIAG only
 }
 
 // OFFLINE: the cabinet is offline or never said "got it" (it did not receive the command)
@@ -280,6 +295,7 @@ export function cabinetErrorMessage(error: CabinetError, action: CabinetAction):
     return 'That slot is busy at the cabinet right now. Please try again in a moment.';
   }
   if (action === 'WIFI') return 'The cabinet did not confirm the WiFi change in time.';
+  if (action === 'DIAG') return 'The cabinet did not send the RFID check results in time.';
   if (action === 'OPEN') return 'The cabinet did not confirm lock opening in time.';
   if (action === 'CLOSE') return 'The cabinet did not confirm lock closing in time.';
   return action === 'BORROW'

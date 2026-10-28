@@ -97,7 +97,7 @@ export async function POST(request: Request) {
 
     if (!result.ok) {
       if (result.error === 'TIMEOUT') {
-        await raiseAlert('CABINET_NO_RESPONSE', 'warning', `The cabinet confirmed ${indexNo}'s return to Slot ${homeSlot.slot} but never sent the result. Check whether the umbrella is back.`, {
+        await raiseAlert('CABINET_NO_RESPONSE', 'warning', `The station confirmed ${indexNo}'s return to Slot ${homeSlot.slot} but never sent the result. Check whether the umbrella is back.`, {
           slot: homeSlot.slot, index_no: indexNo, actor: 'cabinet', dedupeKey: `slot:${homeSlot.slot}`,
         });
       }

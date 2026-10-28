@@ -149,7 +149,7 @@ async function readCabinetResponse(
   return (
     result ?? {
       success: false,
-      message: 'The connection to the station was lost before the cabinet answered. Check the dashboard in a moment.',
+      message: 'The connection to the station was lost before it answered. Check the dashboard in a moment.',
     }
   );
 }
@@ -181,7 +181,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<'borrow' | 'return' | null>(null);
   const [unlockCountdown, setUnlockCountdown] = useState<number | null>(null);
-  const [lockClosing, setLockClosing] = useState(false); // take window over, the cabinet is closing the lock
+  const [lockClosing, setLockClosing] = useState(false); // take window over, the station is closing the lock
   const [pendingSlot, setPendingSlot] = useState<number | null>(null);
   const [result, setResult] = useState<ActionResult | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -371,7 +371,7 @@ export default function DashboardPage() {
     setDevSlotBusy((prev) => ({ ...prev, [slot]: 'borrow' }));
     setNotification({
       type: 'info',
-      text: `🔓 [Slot #${slot}] Sending Borrow command to cabinet…`,
+      text: `🔓 [Slot #${slot}] Sending Borrow command to station…`,
     });
 
     try {
@@ -401,7 +401,7 @@ export default function DashboardPage() {
     setDevSlotBusy((prev) => ({ ...prev, [slot]: 'return' }));
     setNotification({
       type: 'info',
-      text: `🔒 [Slot #${slot}] Sending Return command to cabinet…`,
+      text: `🔒 [Slot #${slot}] Sending Return command to station…`,
     });
 
     try {
@@ -598,10 +598,10 @@ export default function DashboardPage() {
       </header>
 
       <main className="astrix-sheet space-y-4" aria-busy={loading}>
-        {/* Cabinet Offline Banner */}
+        {/* Station Offline Banner */}
         {cabinetOffline && (
           <div className="p-3.5 rounded-2xl text-xs bg-slate-800 text-white border border-slate-700 shadow-sm" role="status">
-            <p className="font-bold">The umbrella cabinet is offline</p>
+            <p className="font-bold">The umbrella station is offline</p>
             <p className="text-slate-300 mt-0.5">Borrowing and returning are paused until it reconnects. This page updates by itself.</p>
           </div>
         )}
@@ -708,7 +708,7 @@ export default function DashboardPage() {
               </div>
 
               <div className="space-y-1">
-                <p className="text-xs text-purple-200 font-medium">Cabinet Hardware Control</p>
+                <p className="text-xs text-purple-200 font-medium">Station Hardware Control</p>
                 <div className="text-2xl font-black tracking-tight flex items-center gap-2">
                   <span>ESP32 Diagnostics</span>
                   <span className="text-[11px] px-2 py-0.5 rounded-md bg-emerald-400 text-emerald-950 font-bold">
@@ -726,7 +726,7 @@ export default function DashboardPage() {
             <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-sm space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                  Cabinet Slots (1 - 4) Hardware Controls
+                  Station Slots (1 - 4) Hardware Controls
                 </span>
                 <span className="text-[11px] font-mono text-purple-600 font-bold">
                   QoS 0 • Live

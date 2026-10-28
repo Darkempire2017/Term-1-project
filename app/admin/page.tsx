@@ -351,7 +351,7 @@ export default function AdminPage() {
                 {o.cabinet.online === false ? <WifiOff className="w-5 h-5 text-rose-600" /> : <Wifi className="w-5 h-5 text-emerald-600" />}
                 <div>
                   <p className="text-sm font-black text-slate-900">
-                    Cabinet {o.cabinet.online === false ? 'offline' : o.cabinet.online ? 'online' : 'status unknown'}
+                    Station {o.cabinet.online === false ? 'offline' : o.cabinet.online ? 'online' : 'status unknown'}
                   </p>
                   <p className="text-[11px] text-slate-500">Last slot report {timeAgo(o.cabinet.report_at)}</p>
                 </div>
@@ -390,7 +390,7 @@ export default function AdminPage() {
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-600">
-                      {s.held ? `Held for ${s.borrowed_user}` : loan ? `With ${loan.index_no}${loan.status === 'OVERDUE' ? ' (overdue)' : ''}` : s.availability ? 'In the cabinet' : 'Out, no loan'}
+                      {s.held ? `Held for ${s.borrowed_user}` : loan ? `With ${loan.index_no}${loan.status === 'OVERDUE' ? ' (overdue)' : ''}` : s.availability ? 'In the station' : 'Out, no loan'}
                     </p>
                     <p className="text-[10px] text-slate-400 flex items-center gap-1">
                       <Umbrella className="w-3 h-3" />
@@ -401,7 +401,7 @@ export default function AdminPage() {
                           {c.locked === false ? ' · unlocked' : c.locked ? ' · locked' : ''}
                         </>
                       ) : (
-                        'no cabinet report'
+                        'no station report'
                       )}
                     </p>
                   </div>
@@ -466,7 +466,7 @@ export default function AdminPage() {
                       Release hold
                     </button>
                   )}
-                  <button onClick={() => runAction('slot.markAvailable', { slot: s.slot }, `Mark Slot ${s.slot} as available (umbrella in the cabinet)?`)} className={`${btn} border-emerald-300 bg-emerald-50 text-emerald-800`}>
+                  <button onClick={() => runAction('slot.markAvailable', { slot: s.slot }, `Mark Slot ${s.slot} as available (umbrella in the station)?`)} className={`${btn} border-emerald-300 bg-emerald-50 text-emerald-800`}>
                     Mark available
                   </button>
                   <button onClick={() => runAction('slot.markOut', { slot: s.slot }, `Mark Slot ${s.slot} as out?`)} className={`${btn} border-slate-300 bg-white text-slate-700`}>

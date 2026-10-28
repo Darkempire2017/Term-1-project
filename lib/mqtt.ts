@@ -21,7 +21,7 @@ export const MQTT_TOPIC_ACK = 'astrix-umbrella/cabinet/ack';
 export const MQTT_TOPIC_STATUS = 'astrix-umbrella/cabinet/status';
 
 const STATUS_WAIT_MS = 1500; // how long to wait for the retained status before sending
-const ACK_WAIT_MS = 6000;    // no "got it" within this -> the cabinet is offline
+const ACK_WAIT_MS = 6000;    // no "got it" within this -> the station is offline
 
 export interface CabinetStatus {
   online: boolean;
@@ -246,19 +246,19 @@ export async function runCabinetCommand(
  */
 export function cabinetErrorMessage(error: CabinetError, action: CabinetAction): string {
   if (error === 'CONNECT_FAILED') {
-    return 'Could not reach the umbrella cabinet. Please try again in a moment.';
+    return 'Could not reach the umbrella station. Please try again in a moment.';
   }
   if (error === 'OFFLINE') {
-    return 'The umbrella cabinet is offline right now. Please try again later.';
+    return 'The umbrella station is offline right now. Please try again later.';
   }
   if (error === 'BUSY') {
-    return 'That slot is busy at the cabinet right now. Please try again in a moment.';
+    return 'That slot is busy at the station right now. Please try again in a moment.';
   }
-  if (action === 'OPEN') return 'The cabinet did not confirm lock opening in time.';
-  if (action === 'CLOSE') return 'The cabinet did not confirm lock closing in time.';
+  if (action === 'OPEN') return 'The station did not confirm lock opening in time.';
+  if (action === 'CLOSE') return 'The station did not confirm lock closing in time.';
   return action === 'BORROW'
-    ? 'The cabinet did not respond in time. If the slot opened and you took the umbrella, please contact the station team.'
-    : 'The cabinet did not respond in time. If you put the umbrella back, please contact the station team.';
+    ? 'The station did not respond in time. If the slot opened and you took the umbrella, please contact the station team.'
+    : 'The station did not respond in time. If you put the umbrella back, please contact the station team.';
 }
 
 /**

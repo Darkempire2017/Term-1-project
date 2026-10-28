@@ -34,14 +34,14 @@ export async function runAdminChecks() {
 async function checkCabinetOnline() {
   const online = getCachedCabinetOnline();
   if (online === false) {
-    await raiseAlert('CABINET_OFFLINE', 'critical', 'The umbrella cabinet is offline. Borrowing and returning are paused.', {
+    await raiseAlert('CABINET_OFFLINE', 'critical', 'The umbrella station is offline. Borrowing and returning are paused.', {
       actor: 'cabinet',
       dedupeKey: 'cabinet',
     });
   } else if (online === true) {
     await resolveAlerts('CABINET_OFFLINE', 'cabinet');
     if (lastOnline === false) {
-      await logActivity('CABINET_ONLINE', 'The umbrella cabinet is back online', { actor: 'cabinet' });
+      await logActivity('CABINET_ONLINE', 'The umbrella station is back online', { actor: 'cabinet' });
     }
   }
   if (online !== null) lastOnline = online;

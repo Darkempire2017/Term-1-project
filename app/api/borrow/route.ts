@@ -254,9 +254,9 @@ async function completeBorrow(
       // Keep the slot held (not offered to anyone) until staff check it, instead of
       // freeing it and risking an umbrella leaving with no loan.
       console.error(
-        `❌ [API/Borrow] No cabinet response for slot ${claimed.slot} (student ${indexNo}). Slot kept held — check the cabinet and clear umbrellas.borrowed_user by hand.`
+        `❌ [API/Borrow] No station response for slot ${claimed.slot} (student ${indexNo}). Slot kept held — check the station and clear umbrellas.borrowed_user by hand.`
       );
-      await raiseAlert('CABINET_NO_RESPONSE', 'warning', `The cabinet confirmed ${indexNo}'s borrow from Slot ${claimed.slot} but never sent the result. The slot is held until someone checks it.`, {
+      await raiseAlert('CABINET_NO_RESPONSE', 'warning', `The station confirmed ${indexNo}'s borrow from Slot ${claimed.slot} but never sent the result. The slot is held until someone checks it.`, {
         slot: claimed.slot, index_no: indexNo, actor: 'cabinet', dedupeKey: `slot:${claimed.slot}`,
       });
     } else {

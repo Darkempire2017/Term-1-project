@@ -134,7 +134,7 @@ async function doSync() {
     }
     forgetHold(row.slot);
 
-    if (s.busy) continue; // the cabinet is in the middle of a borrow/return on this slot
+    if (s.busy) continue; // the station is in the middle of a borrow/return on this slot
 
     if (s.docked && s.umbrella === row.slot && !row.availability) {
       await markReturnedAtCabinet(row.slot, row.umbrella_id);
@@ -200,7 +200,7 @@ async function releaseStaleHold(slot: number, student: string) {
 
   if (data && data.length > 0) {
     console.log(`🔄 [Cabinet Sync] Slot ${slot} was held for ${student}, but Umbrella ${slot} is still in it: released the hold.`);
-    await raiseAlert('STALE_HOLD_RELEASED', 'info', `Slot ${slot} was held for ${student} after a borrow that never reached the cabinet. The umbrella is still there, so the hold was released.`, {
+    await raiseAlert('STALE_HOLD_RELEASED', 'info', `Slot ${slot} was held for ${student} after a borrow that never reached the station. The umbrella is still there, so the hold was released.`, {
       slot, index_no: student, actor: 'system',
     });
   }
@@ -233,7 +233,7 @@ async function recordLostBorrow(slot: number, umbrellaId: string, student: strin
     });
   } else {
     console.log(`🔄 [Cabinet Sync] Slot ${slot} was held for ${student} and is now empty: recorded the loan of Umbrella ${slot}.`);
-    await raiseAlert('LOST_BORROW_RECORDED', 'warning', `The cabinet's answer for ${student}'s borrow from Slot ${slot} was lost, but the slot is empty, so the loan of Umbrella ${slot} was recorded for them.`, {
+    await raiseAlert('LOST_BORROW_RECORDED', 'warning', `The station's answer for ${student}'s borrow from Slot ${slot} was lost, but the slot is empty, so the loan of Umbrella ${slot} was recorded for them.`, {
       slot, index_no: student, actor: 'system',
     });
   }
@@ -276,7 +276,7 @@ async function markReturnedAtCabinet(slot: number, umbrellaId: string) {
     await raiseAlert('RETURNED_AT_CABINET', 'info', `Umbrella ${slot} was put back in Slot ${slot} outside the website, so ${loan.index_no}'s loan was closed automatically.`, {
       slot, index_no: loan.index_no, actor: 'cabinet', details: { record_id: loan.record_id },
     });
-    await logActivity('RETURN', `${loan.index_no} returned Umbrella ${slot} at the cabinet (closed by sync)`, {
+    await logActivity('RETURN', `${loan.index_no} returned Umbrella ${slot} at the station (closed by sync)`, {
       slot, index_no: loan.index_no, actor: 'cabinet',
     });
 
